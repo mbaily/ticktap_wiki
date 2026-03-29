@@ -1,12 +1,17 @@
-import os, re, html, time
+import os, re, html, time, secrets
 from pathlib import Path
-from fastapi import FastAPI, Form
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi import FastAPI, File, Form, UploadFile
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 import uvicorn
 
 PAGES_DIR = Path(os.environ.get("WIKI_PAGES_DIR", "pages"))
 HOST = os.environ.get("WIKI_HOST", "127.0.0.1")
 PORT = int(os.environ.get("WIKI_PORT", "8080"))
+FILES_DIR      = Path(os.environ.get("WIKI_FILES_DIR", "files"))
+ALLOWED_EXTS   = {"jpg","jpeg","png","gif","webp","svg","pdf","txt","md","csv","zip"}
+IMAGE_EXTS     = {"jpg","jpeg","png","gif","webp","svg"}
+MAX_FILE_SIZE  = 20 * 1024 * 1024   # 20 MB per file
+MAX_TOTAL_SIZE = 100 * 1024 * 1024  # 100 MB per request
 app = FastAPI()
 
 # ── storage helpers ────────────────────────────────────────────────────────────
@@ -35,6 +40,22 @@ def write_page(name: str, content: str):
     tmp.write_text(content, encoding="utf-8", newline="\n")
     tmp.replace(p)
 
+def file_path(ns: str, filename: str) -> Path:
+    """Validate and return the Path for a stored file. Raises ValueError on bad input."""
+    if ns:
+        for seg in ns.strip("/").split("/"):
+            if not re.fullmatch(r"[A-Za-z0-9_\-]+", seg):
+                raise ValueError(f"Invalid ns segment: {seg!r}")
+        base = FILES_DIR.joinpath(*ns.strip("/").split("/"))
+    else:
+        base = FILES_DIR
+    if not re.fullmatch(r"[A-Za-z0-9_\-]+\.[A-Za-z0-9]+", filename):
+        raise ValueError(f"Invalid filename: {filename!r}")
+    target = base / filename
+    if not target.resolve().is_relative_to(FILES_DIR.resolve()):
+        raise ValueError("Path traversal attempt")
+    return target
+
 def strip_meta(src: str) -> tuple[str, int]:
     """Return (stripped_source, number_of_lines_removed_from_top)."""
     if src.startswith("~~META:"):
@@ -59,7 +80,7 @@ def parse_inline(text: str, cur_ns: str = "") -> str:
     def stash_link(m):
         stash.append(m.group(0))
         return f"\x00{len(stash)-1}\x00"
-    text = re.sub(r"\[\[.+?\]\]", stash_link, text)
+    text = re.sub(r"\{\{.+?\}\}|\[\[.+?\]\]", stash_link, text)
 
     text = html.escape(text)
     text = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", text)
@@ -68,12 +89,52 @@ def parse_inline(text: str, cur_ns: str = "") -> str:
     text = re.sub(r"`(.+?)`",       r"<code>\1</code>",     text)
     text = re.sub(r"~~(.+?)~~",     r"<s>\1</s>",           text)
 
+    def render_media(raw: str) -> str:
+        inner = raw[2:-2]
+        pm = inner.split("|", 1)
+        target = pm[0].strip()
+        alt_text = html.escape(pm[1].strip()) if len(pm) > 1 else None
+        if not target:
+            return html.escape(raw)
+        if target.startswith(":"):
+            full = target[1:].replace(":", "/")
+        elif ":" in target:
+            full = target.replace(":", "/")
+        else:
+            full = (cur_ns + "/" + target).lstrip("/") if cur_ns else target
+        f_ns, f_name = full.rsplit("/", 1) if "/" in full else ("", full)
+        alt = alt_text or html.escape(Path(f_name).stem)
+        try:
+            ok = file_path(f_ns, f_name).exists()
+        except (ValueError, OSError):
+            ok = False
+        if not ok:
+            return f'<span class="broken-file">&#128206; {alt}</span>'
+        return f'<img src="/files/{html.escape(full)}" alt="{alt}" style="max-width:100%;height:auto">'
+
     def render_link(raw: str) -> str:
         inner = raw[2:-2]  # strip [[ and ]]
         parts = inner.split("|", 1)
         target, label = parts[0].strip(), (html.escape(parts[1].strip()) if len(parts) > 1 else None)
         if not target:
             return html.escape(raw)  # [[]] or [[ ]] — render as plain text
+        if target.startswith("file:"):
+            ft = target[5:]
+            if ft.startswith(":"):
+                full = ft[1:].replace(":", "/")
+            elif ":" in ft:
+                full = ft.replace(":", "/")
+            else:
+                full = (cur_ns + "/" + ft).lstrip("/") if cur_ns else ft
+            f_ns, f_name = full.rsplit("/", 1) if "/" in full else ("", full)
+            lbl = label or html.escape(Path(f_name).stem)
+            try:
+                ok = file_path(f_ns, f_name).exists()
+            except (ValueError, OSError):
+                ok = False
+            if not ok:
+                return f'<span class="broken-file">&#128206; {lbl}</span>'
+            return f'<a href="/files/{html.escape(full)}">&#128206; {lbl}</a>'
         if target.startswith(("http://", "https://")):
             return f'<a href="{html.escape(target)}" target="_blank" rel="noopener">{label or html.escape(target)}</a>'
         if target.startswith(":"):
@@ -91,7 +152,8 @@ def parse_inline(text: str, cur_ns: str = "") -> str:
         return f'<a href="/wiki/{html.escape(url)}"{cls}>{lbl}</a>'
 
     def restore(m):
-        return render_link(stash[int(m.group(1))])
+        raw = stash[int(m.group(1))]
+        return render_media(raw) if raw.startswith("{{") else render_link(raw)
 
     return re.sub(r"\x00(\d+)\x00", restore, text)
 
@@ -239,6 +301,8 @@ input[type=checkbox]{cursor:pointer;width:1.1em;height:1.1em;vertical-align:midd
 .search-result a{font-weight:bold}
 .snippet{font-size:.85rem;color:#555;font-family:monospace}
 .sitemap ul{list-style:none;padding-left:1.2rem}.sitemap>ul{padding-left:0}
+.broken-file{color:#c0392b;font-style:italic}
+.content img{max-width:100%;height:auto}
 """
 
 JS = """
@@ -304,7 +368,52 @@ def dir_listing(d: Path, prefix: str) -> str:
                 mtime = "unknown"
             items += f'<li>&#128196; <a href="/wiki/{pname}">{html.escape(child.stem)}</a> <small style="color:#888">{mtime}</small></li>'
     return items + "</ul>"
-
+def files_section(ns: str) -> str:
+    """Return collapsible HTML listing files attached to namespace ns."""
+    ns_dir = (FILES_DIR.joinpath(*ns.split("/")) if ns else FILES_DIR)
+    attach_url = f"/upload/{ns}" if ns else "/upload"
+    if not ns_dir.is_dir():
+        return f'<p style="margin-top:1rem"><a href="{attach_url}" target="_blank">&#128206; Attach files</a></p>'
+    items = []
+    for child in sorted(ns_dir.iterdir()):
+        if not child.is_file():
+            continue
+        ext = child.suffix.lower().lstrip(".")
+        if ext not in ALLOWED_EXTS:
+            continue
+        try:
+            st = child.stat()
+            size_str = f"{st.st_size // 1024} KB" if st.st_size >= 1024 else f"{st.st_size} B"
+            mtime = time.strftime("%Y-%m-%d", time.localtime(st.st_mtime))
+        except OSError:
+            size_str, mtime = "?", "unknown"
+        ns_c = ns.replace("/", ":") if ns else ""
+        lbl = re.sub(r"[|{}\[\]]", "_", child.stem)
+        if ns_c:
+            markup = (f'{{{{{ns_c}:{child.name}|{lbl}}}}}' if ext in IMAGE_EXTS
+                      else f'[[file:{ns_c}:{child.name}|{lbl}]]')
+        else:
+            markup = (f'{{{{{child.name}|{lbl}}}}}' if ext in IMAGE_EXTS
+                      else f'[[file:{child.name}|{lbl}]]')
+        fp = f"{ns}/{child.name}" if ns else child.name
+        del_btn = (f'<form method="post" action="/file-delete/{fp}" style="display:inline">'
+                   f'<button type="submit" title="Delete" '
+                   f'style="background:none;border:none;cursor:pointer;color:#c0392b">&#128465;</button></form>')
+        items.append(
+            f'<li style="padding:.2rem 0">&#128206; '
+            f'<a href="/files/{html.escape(fp)}">{html.escape(child.name)}</a> '
+            f'<small style="color:#888">{size_str}, {mtime}</small> '
+            f'<button data-markup="{html.escape(markup)}" '
+            f'onclick="navigator.clipboard.writeText(this.dataset.markup)" '
+            f'style="font-size:.75rem;padding:.1rem .3rem;cursor:pointer;border:1px solid #aaa;border-radius:3px;background:none">'
+            f'copy link</button> {del_btn}</li>'
+        )
+    attach_link = f'<a href="{attach_url}" target="_blank" style="font-size:.85rem;font-weight:normal">[+ attach]</a>'
+    if not items:
+        return f'<p style="margin-top:1rem">&#128206; No files. <a href="{attach_url}" target="_blank">Attach files</a></p>'
+    return (f'<details style="margin-top:1rem" open>'
+            f'<summary style="cursor:pointer;font-weight:bold">&#128206; Attached files ({len(items)}) {attach_link}</summary>'
+            f'<ul style="list-style:none;padding:.4rem 0 0 0">{"" .join(items)}</ul></details>')
 # ── routes ─────────────────────────────────────────────────────────────────────
 
 @app.get("/")
@@ -386,12 +495,15 @@ def edit_get(name: str):
     if src is None:
         src = f"====== {name.split('/')[-1]} ======\n\n===== Introduction =====\n\nNew page.\n"
     content = html.escape(src)
+    ns_for_upload = "/".join(name.split("/")[:-1])
+    upload_href = f"/upload/{ns_for_upload}" if ns_for_upload else "/upload"
     body = (f'<div class="layout"><div class="content">{breadcrumb(name)}'
             f'<div class="edit-toolbar">'
             f'<strong>{html.escape(name.split("/")[-1])}</strong>'
             f'<button form="ef" type="submit">Save</button>'
             f'<a href="/wiki/{name}">Cancel</a>'
             f'<button type="button" onclick="showPreview()">Preview</button>'
+            f'<a href="{upload_href}" target="_blank">&#128206; Attach</a>'
             f'</div>'
             f'<form id="ef" method="post">'
             f'<textarea name="content" rows="30" id="ed">{content}</textarea>'
@@ -471,9 +583,11 @@ def ns_view(ns: str):
     ns_dir = PAGES_DIR.joinpath(*ns.strip("/").split("/"))
     if not ns_dir.is_dir():
         return HTMLResponse("Namespace not found", 404)
+    ns_clean = ns.strip("/")
     body = (f'<div class="layout"><div class="content">'
             f'<h1>Namespace: {html.escape(ns)}</h1>'
-            f'{dir_listing(ns_dir, ns.strip("/"))}'
+            f'{dir_listing(ns_dir, ns_clean)}'
+            f'{files_section(ns_clean)}'
             f'</div></div>')
     return HTMLResponse(shell(f"ns:{ns}", body))
 
@@ -553,6 +667,147 @@ async def delete_post(name: str, confirm: str = Form("")):
     return RedirectResponse("/wiki/Home", status_code=303)
 
 
+# ── file upload helpers ────────────────────────────────────────────────────────
+
+_FILE_MIME = {
+    "jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png",
+    "gif": "image/gif",  "webp": "image/webp", "svg": "image/svg+xml",
+    "pdf": "application/pdf", "txt": "text/plain", "md": "text/plain",
+    "csv": "text/csv",   "zip": "application/zip",
+}
+
+def _upload_page(ns: str, results: list | None) -> HTMLResponse:
+    ns_display = ns.replace("/", ":") if ns else "(root)"
+    action = f"/upload/{ns}" if ns else "/upload"
+    res_html = ""
+    if results:
+        rows = "".join(
+            f'<tr><td style="padding:.3rem .6rem">{html.escape(r["name"])}</td>'
+            f'<td style="padding:.3rem .6rem">{"&#10003;" if r["ok"] else "&#10007; " + html.escape(r.get("error", ""))}</td>'
+            f'<td style="padding:.3rem .6rem;font-family:monospace;font-size:.85rem">{html.escape(r.get("markup", ""))}</td></tr>'
+            for r in results
+        )
+        snippet = "\n".join(r["markup"] for r in results if r.get("ok") and r.get("markup"))
+        snip_esc = html.escape(snippet)
+        res_html = (
+            f'<table style="width:100%;border-collapse:collapse;border:1px solid #ddd;margin:1rem 0">'
+            f'<tr style="background:#ecf0f1">'
+            f'<th style="padding:.3rem .6rem;text-align:left">File</th>'
+            f'<th style="padding:.3rem .6rem;text-align:left">Status</th>'
+            f'<th style="padding:.3rem .6rem;text-align:left">Markup</th></tr>{rows}</table>'
+            f'<p><strong>Paste into your page:</strong></p>'
+            f'<textarea id="snip" rows="{max(2, snippet.count(chr(10)) + 1)}" '
+            f'style="width:100%;font-family:monospace">{snip_esc}</textarea><br>'
+            f'<button onclick="navigator.clipboard.writeText(document.getElementById(\'snip\').value).then(()=>window.close())" '
+            f'style="margin:.5rem 0;padding:.4rem .8rem;cursor:pointer">&#128203; Copy links &amp; close tab</button>'
+        )
+    body = (
+        f'<div class="layout"><div class="content">'
+        f'<h1>&#128206; Attach files</h1>'
+        f'<p>Namespace: <strong>{html.escape(ns_display)}</strong></p>'
+        f'{res_html}'
+        f'<form method="post" action="{html.escape(action)}" enctype="multipart/form-data" style="margin-top:1rem">'
+        f'<input type="file" name="files" multiple '
+        f'accept=".jpg,.jpeg,.png,.gif,.webp,.svg,.pdf,.txt,.md,.csv,.zip" '
+        f'style="display:block;margin:.8rem 0;width:100%">'
+        f'<button type="submit" style="padding:.4rem .8rem">&#8593; Upload</button>'
+        f'</form></div></div>'
+    )
+    return HTMLResponse(shell(f"Upload — {html.escape(ns_display)}", body))
+
+async def _do_upload(ns: str, files: list[UploadFile]) -> HTMLResponse:
+    if ns:
+        for seg in ns.strip("/").split("/"):
+            if not re.fullmatch(r"[A-Za-z0-9_\-]+", seg):
+                return HTMLResponse("Invalid namespace", 400)
+    dest = (FILES_DIR.joinpath(*ns.strip("/").split("/")) if ns else FILES_DIR)
+    dest.mkdir(parents=True, exist_ok=True)
+    results, total = [], 0
+    for f in files:
+        if not f.filename:
+            continue
+        ext = Path(f.filename).suffix.lower().lstrip(".")
+        if ext not in ALLOWED_EXTS:
+            results.append({"name": f.filename, "ok": False, "error": f".{ext} not allowed"})
+            continue
+        data = await f.read(MAX_FILE_SIZE + 1)
+        if len(data) > MAX_FILE_SIZE:
+            results.append({"name": f.filename, "ok": False, "error": "exceeds 20 MB"})
+            continue
+        total += len(data)
+        if total > MAX_TOTAL_SIZE:
+            results.append({"name": f.filename, "ok": False, "error": "total exceeds 100 MB"})
+            break
+        safe_stem = re.sub(r"[^A-Za-z0-9_\-]", "_", Path(f.filename).stem)[:40] or "file"
+        uname = f"{safe_stem}_{secrets.token_hex(4)}.{ext}"
+        (dest / uname).write_bytes(data)
+        ns_c = ns.replace("/", ":") if ns else ""
+        lbl = re.sub(r"[|{}\[\]]", "_", Path(f.filename).stem)
+        if ns_c:
+            markup = (f'{{{{{ns_c}:{uname}|{lbl}}}}}' if ext in IMAGE_EXTS
+                      else f'[[file:{ns_c}:{uname}|{lbl}]]')
+        else:
+            markup = (f'{{{{{uname}|{lbl}}}}}' if ext in IMAGE_EXTS
+                      else f'[[file:{uname}|{lbl}]]')
+        results.append({"name": f.filename, "ok": True, "markup": markup})
+    return _upload_page(ns, results)
+
+
+@app.get("/upload", response_class=HTMLResponse)
+def upload_get_root(): return _upload_page("", None)
+
+@app.get("/upload/{ns:path}", response_class=HTMLResponse)
+def upload_get(ns: str): return _upload_page(ns, None)
+
+@app.post("/upload", response_class=HTMLResponse)
+async def upload_post_root(files: list[UploadFile] = File(default=[])):
+    return await _do_upload("", files)
+
+@app.post("/upload/{ns:path}", response_class=HTMLResponse)
+async def upload_post(ns: str, files: list[UploadFile] = File(default=[])):
+    return await _do_upload(ns, files)
+
+
+@app.get("/files/{filepath:path}")
+def serve_file(filepath: str):
+    filepath = filepath.strip("/")
+    if not filepath:
+        return HTMLResponse("Not found", 404)
+    if "/" in filepath:
+        f_ns, filename = filepath.rsplit("/", 1)
+    else:
+        f_ns, filename = "", filepath
+    try:
+        p = file_path(f_ns, filename)
+    except ValueError:
+        return HTMLResponse("Not found", 404)
+    if not p.exists():
+        return HTMLResponse("Not found", 404)
+    ext = Path(filename).suffix.lower().lstrip(".")
+    if ext not in ALLOWED_EXTS:
+        return HTMLResponse("Not found", 404)
+    headers = {"X-Content-Type-Options": "nosniff"}
+    if ext == "svg":
+        headers["Content-Security-Policy"] = "sandbox"
+    return FileResponse(str(p), media_type=_FILE_MIME.get(ext, "application/octet-stream"), headers=headers)
+
+
+@app.post("/file-delete/{filepath:path}", response_class=HTMLResponse)
+async def file_delete(filepath: str):
+    filepath = filepath.strip("/")
+    if "/" in filepath:
+        f_ns, filename = filepath.rsplit("/", 1)
+    else:
+        f_ns, filename = "", filepath
+    try:
+        p = file_path(f_ns, filename)
+        if p.exists():
+            p.unlink()
+    except ValueError:
+        return HTMLResponse("Invalid file path", 400)
+    return RedirectResponse(f"/ns/{f_ns}" if f_ns else "/sitemap", status_code=303)
+
+
 # ── startup ────────────────────────────────────────────────────────────────────
 
 WELCOME = """\
@@ -583,6 +838,7 @@ This is your personal wiki. Edit this page to get started.
 """
 
 PAGES_DIR.mkdir(parents=True, exist_ok=True)
+FILES_DIR.mkdir(parents=True, exist_ok=True)
 home = PAGES_DIR / "Home.wiki"
 if not home.exists():
     home.write_text(WELCOME, encoding="utf-8", newline="\n")
