@@ -454,7 +454,7 @@ def _load_tokens() -> dict:
     return {}
 
 def _save_tokens(tokens: dict):
-    tmp = TOKEN_FILE.with_suffix(".tmp")
+    tmp = TOKEN_FILE.parent / (TOKEN_FILE.name + ".tmp")
     tmp.write_text(json.dumps(tokens, indent=2), encoding="utf-8")
     tmp.replace(TOKEN_FILE)
 
@@ -524,20 +524,27 @@ def _check_password(username: str, password: str) -> bool:
     """Verify username/password against HTPASSWD_FILE. Supports bcrypt hashes only."""
     try:
         import bcrypt as _bcrypt  # type: ignore
-        for line in HTPASSWD_FILE.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if not line or line.startswith("#") or ":" not in line:
-                continue
-            u, h = line.split(":", 1)
-            if u != username:
-                continue
-            hb = h.encode()
-            # Apache uses $2y$; Python bcrypt uses $2b$ — identical algorithm
-            if hb.startswith(b"$2y$"):
-                hb = b"$2b$" + hb[4:]
+    except ImportError:
+        return False
+    try:
+        lines = HTPASSWD_FILE.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return False
+    for line in lines:
+        line = line.strip()
+        if not line or line.startswith("#") or ":" not in line:
+            continue
+        u, h = line.split(":", 1)
+        if u != username:
+            continue
+        hb = h.encode()
+        # Apache uses $2y$; Python bcrypt uses $2b$ — identical algorithm
+        if hb.startswith(b"$2y$"):
+            hb = b"$2b$" + hb[4:]
+        try:
             return _bcrypt.checkpw(password.encode(), hb)
-    except Exception:
-        pass
+        except Exception:
+            return False
     return False
 
 def _htpasswd_set(username: str, password: str, htfile: Path):
@@ -574,8 +581,11 @@ class _LoginRedirect(Exception):
 
 @app.exception_handler(_LoginRedirect)
 async def _login_redirect_handler(request: Request, exc: _LoginRedirect):
-    from urllib.parse import quote
-    return RedirectResponse(f"/login?next={quote(exc.next_url, safe='')}", status_code=303)
+    from urllib.parse import quote, urlparse
+    # Extract only path+query so the next= param works under both HTTP and HTTPS
+    parsed = urlparse(exc.next_url)
+    path_qs = parsed.path + (f"?{parsed.query}" if parsed.query else "")
+    return RedirectResponse(f"/login?next={quote(path_qs, safe='')}", status_code=303)
 
 # ── routes ─────────────────────────────────────────────────────────────────────
 
