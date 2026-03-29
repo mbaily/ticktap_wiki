@@ -33,14 +33,19 @@
 
 ### 3.2 Headings
 
+DokuWiki convention: **more equals signs = bigger heading**.
+
 | Syntax | Output | Role |
 |--------|--------|------|
-| `= Title =` | `<h1>` | Page title |
-| `== Section ==` | `<h2>` | Independently editable section boundary |
-| `=== Sub-section ===` | `<h3>` | Sub-section |
+| `====== Title ======` | `<h1>` | Page title (biggest) |
+| `===== Section =====` | `<h2>` | Independently editable section boundary |
+| `==== Sub-section ====` | `<h3>` | Sub-section |
+| `=== Sub-sub-section ===` | `<h4>` | |
+| `== Minor heading ==` | `<h5>` | Smallest heading |
 
 - Headings must occupy their own line.
 - Each heading generates an `id` anchor derived from its text (lowercase, spaces → `-`).
+- Section editing applies to `=====` (h2) headings, matching DokuWiki behaviour.
 
 ### 3.3 Lists
 
