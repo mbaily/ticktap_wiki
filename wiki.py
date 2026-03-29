@@ -6,7 +6,7 @@ from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 import uvicorn
 
 PAGES_DIR = Path(os.environ.get("WIKI_PAGES_DIR", "pages"))
-HOST = os.environ.get("WIKI_HOST", "127.0.0.1")
+HOST = os.environ.get("WIKI_HOST", "0.0.0.0")
 PORT = int(os.environ.get("WIKI_PORT", "8080"))
 FILES_DIR      = Path(os.environ.get("WIKI_FILES_DIR", "files"))
 ALLOWED_EXTS   = {"jpg","jpeg","png","gif","webp","svg","pdf","txt","md","csv","zip"}
@@ -23,6 +23,8 @@ TOKEN_FILE        = Path(__file__).parent / ".wiki_tokens"
 HTTPS_ENABLED     = True          # set True to enable TLS
 TLS_CERT_FILE     = "cert.pem"
 TLS_KEY_FILE      = "key.pem"
+
+DARK_MODE         = True         # set True to use dark colour scheme
 
 app = FastAPI()
 
@@ -320,6 +322,45 @@ input[type=checkbox]{cursor:pointer;width:1.1em;height:1.1em;vertical-align:midd
 .login-box input[type=text],.login-box input[type=password]{width:100%;padding:.4rem .6rem;margin:.3rem 0 .8rem;border:1px solid #ccc;border-radius:4px;font-size:1rem}
 .login-box button{width:100%;padding:.5rem;font-size:1rem;background:#2c3e50;color:#fff;border:none;border-radius:4px;cursor:pointer}
 .login-error{background:#fde;border:1px solid #c0392b;padding:.5rem .8rem;border-radius:4px;margin-bottom:.8rem;font-size:.9rem}
+@media(max-width:700px){
+  nav{flex-wrap:wrap;gap:.5rem}
+  nav form{width:100%;margin-left:0!important}
+  nav input[type=search]{width:100%}
+  .layout{flex-direction:column;padding:0 .5rem}
+  .toc{width:100%;position:static;order:-1}
+  .toc ul{display:none}
+  .toolbar{flex-wrap:wrap;gap:.4rem}
+  .content{padding:.7rem}
+  .login-box{margin:1rem auto;padding:1.2rem}
+}
+"""
+
+CSS_DARK = """
+html{color-scheme:dark;background:#1a1a2e}
+body{color:#cdd;background:#1a1a2e}
+.content{background:#16213e;border-color:#2a2a4a;color:#cdd}
+.toc{background:#16213e;border-color:#2a2a4a}
+.toc a{color:#8ab4f8}.toc a:hover{color:#aecbfa}
+nav{background:#0f3460}
+.toolbar{background:#1e2a45}
+.toolbar a,.toolbar button{color:#8ab4f8;border-color:#2a3f6f}
+.edit-toolbar button,.edit-toolbar a{color:#cdd;border-color:#2a3f6f}
+textarea{-webkit-appearance:none;background:#1a1a2e;color:#cdd;border-color:#2a3f6f}
+input[type=text],input[type=password],input[type=search]{-webkit-appearance:none;background:#1a1a2e;color:#cdd;border-color:#2a3f6f}
+.preview-box{background:#16213e;border-color:#2a3f6f}
+.notice{background:#3a2e00;border-color:#7a6000;color:#ffd}
+pre{background:#111827}code{background:#1e2a45}
+h2{border-bottom-color:#2a3f6f}
+hr{border-top-color:#2a3f6f}
+.breadcrumb{color:#8ab4f8}.breadcrumb a{color:#8ab4f8}
+.search-result{background:#16213e;border-color:#2a3f6f}
+.snippet{color:#8ab4f8}
+a.new-page{color:#f87171}
+.sect-edit{color:#8ab4f8;border-color:#2a3f6f}
+.login-box{background:#16213e;border-color:#2a3f6f;color:#cdd}
+.login-box input[type=text],.login-box input[type=password]{-webkit-appearance:none;background:#1a1a2e;color:#cdd;border-color:#2a3f6f}
+.login-box button{background:#0f3460}
+.login-error{background:#3a0000;border-color:#c0392b}
 """
 
 JS = """
@@ -352,10 +393,11 @@ def shell(title: str, body: str, search_q: str = "", request: Request | None = N
     username = ""
     if AUTH_ENABLED and request is not None:
         username = _validate_token(_get_token(request)) or ""
+    dark = f'<style>{CSS_DARK}</style>' if DARK_MODE else ""
     return (f'<!doctype html><html lang="en"><head><meta charset="utf-8">'
             f'<meta name="viewport" content="width=device-width,initial-scale=1">'
-            f'<title>{html.escape(title)} — Wiki</title>'
-            f'<style>{CSS}</style></head><body>'
+            f'<title>{html.escape(title)} \u2014 Wiki</title>'
+            f'<style>{CSS}</style>{dark}</head><body>'
             f'{nav_bar(search_q, username)}{body}'
             f'<script>{JS}</script></body></html>')
 
@@ -854,9 +896,10 @@ def _login_page(next_url: str, error: str = "") -> HTMLResponse:
             f'<label>Password<input type="password" name="password" autocomplete="current-password" required></label>'
             f'<button type="submit">Log in</button>'
             f'</form></div>')
+    dark = f'<style>{CSS_DARK}</style>' if DARK_MODE else ""
     return HTMLResponse(f'<!doctype html><html lang="en"><head><meta charset="utf-8">'
                         f'<meta name="viewport" content="width=device-width,initial-scale=1">'
-                        f'<title>Login \u2014 Wiki</title><style>{CSS}</style></head>'
+                        f'<title>Login \u2014 Wiki</title><style>{CSS}</style>{dark}</head>'
                         f'<body>{body}</body></html>')
 
 @app.get("/login", response_class=HTMLResponse)
@@ -1304,7 +1347,7 @@ CONFIGURATION
         if not Path(TLS_KEY_FILE).exists():
             raise SystemExit(f"HTTPS_ENABLED=True but key file not found: {TLS_KEY_FILE}")
 
-    kwargs: dict = {"host": HOST, "port": PORT, "reload": False}
+    kwargs: dict = {"host": HOST, "port": PORT, "reload": False, "timeout_keep_alive": 0}
     if HTTPS_ENABLED:
         kwargs["ssl_certfile"] = TLS_CERT_FILE
         kwargs["ssl_keyfile"]  = TLS_KEY_FILE
