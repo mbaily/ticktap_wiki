@@ -142,7 +142,7 @@ code here
 | POST | `/toggle/{name:path}/{line}` | Toggle checkbox state (AJAX, no page reload) |
 | GET | `/new` | Create new page form |
 | GET | `/ns/{ns:path}` | Browse a namespace (list pages + sub-namespaces) |
-| GET | `/index` | List all pages and namespaces |
+| GET | `/sitemap` | Site map: tree of all pages and namespaces |
 | GET | `/search?q={query}` | Full-text search results page |
 | POST | `/delete/{name:path}` | Delete a page (with confirmation) |
 
@@ -197,6 +197,7 @@ A separate, dedicated editing mode — never mixed into the reader view.
 - Namespace separator in markup and URLs: `:` in wiki syntax, `/` in URLs.
 - Conversion: `ns:sub:Page` ↔ URL `/wiki/ns/sub/Page` ↔ file `pages/ns/sub/Page.wiki`.
 - **Namespace index** (`GET /ns/{path}`): shows all pages and sub-namespaces within that namespace, with last-modified dates.
+- The site map (`GET /sitemap`) links to both individual pages and namespace indexes.
 - **Breadcrumb trail** in the reader/editor header reflects the full namespace path, e.g. `root > projects > alpha > Home`; each segment links to its namespace index.
 - Creating a page in a new namespace automatically creates the required directories.
 - Deleting the last page in a namespace does **not** automatically remove the directory (avoids accidental data loss).
@@ -204,9 +205,9 @@ A separate, dedicated editing mode — never mixed into the reader view.
 
 ---
 
-## 10. Page Index
+## 10. Site Map
 
-- `GET /index` renders a tree of all namespaces and `.wiki` files under `pages/`, sorted alphabetically.
+- `GET /sitemap` renders a tree of all namespaces and `.wiki` files under `pages/`, sorted alphabetically.
 - Each page entry links to the reader view; each namespace entry links to its namespace index.
 - Shows last-modified date beside each page name.
 - Accessible from the navigation bar on every page.
