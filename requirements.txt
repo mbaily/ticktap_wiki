@@ -1,0 +1,14 @@
+# Core server dependencies
+fastapi
+uvicorn[standard]
+python-multipart
+
+# Required when AUTH_ENABLED = True (default)
+bcrypt
+
+# Required for --gencert (self-signed TLS certificate generation)
+cryptography
+
+# Test dependencies
+httpx
+pytest
