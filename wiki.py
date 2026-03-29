@@ -108,6 +108,9 @@ def _prune_attic(name: str):
     d = _attic_page_dir(name)
     if not d.is_dir():
         return
+    # Clean up any .tmp files left by a crashed previous save
+    for tmp_f in d.glob("*.tmp"):
+        tmp_f.unlink(missing_ok=True)
     now = datetime.now(timezone.utc)
     T, K = VERSION_BASE_SECS, VERSION_SLOTS
     max_age = math.exp(K) * T
@@ -1263,6 +1266,11 @@ _SNAP_RE = re.compile(r"^\d{8}_\d{6}$")
 
 @app.get("/history/{name:path}", response_class=HTMLResponse)
 def history(request: Request, name: str, snap: str = "", _auth: None = Depends(require_auth)):
+    if not VERSIONING_ENABLED:
+        return HTMLResponse(shell("History", '<div class="layout"><div class="content">'
+                                  '<div class="notice">Versioning is disabled '
+                                  '(<code>VERSIONING_ENABLED = False</code> in config).</div>'
+                                  '</div></div>', request=request))
     try:
         d = _attic_page_dir(name)
     except ValueError:
