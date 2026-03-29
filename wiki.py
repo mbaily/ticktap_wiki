@@ -1557,23 +1557,41 @@ CONFIGURATION
         kwargs["ssl_keyfile"]  = TLS_KEY_FILE
     import asyncio
 
-    # On Windows, browsers resolve "localhost" to ::1 (IPv6) first; if the
-    # server only listens on 0.0.0.0 (IPv4) the IPv6 probe times out (~1 s)
-    # before falling back to 127.0.0.1.  Fix: run a companion IPv6 server on
-    # the same port so both address families are served immediately.
-    # Also: ProactorEventLoop raises ConnectionResetError (WinError 10054) on
-    # idle keep-alive teardown, stalling the event loop.  SelectorEventLoop
-    # avoids this; we must set the policy before asyncio.run() and bypass
-    # uvicorn.run() which calls setup_event_loop() internally and would override it.
+    # Dual-stack: browsers resolve "localhost" to ::1 (IPv6) first on modern
+    # Windows/Mac.  If the server only binds to 0.0.0.0 (IPv4), the ::1 probe
+    # times out (~1 s) before falling back to 127.0.0.1 — causing a delay on
+    # every first load and after the browser's DNS cache expires (~60-120 s).
+    # Fix: run a companion IPv6 server on :: / ::1 alongside the IPv4 one.
+    #
+    # On Windows, ProactorEventLoop logs ConnectionResetError (WinError 10054)
+    # to the console whenever a browser drops an idle keep-alive connection.
+    # Switching to SelectorEventLoop suppresses that noise.  We must set the
+    # policy before asyncio.run() because uvicorn.run() calls
+    # setup_event_loop() internally which would re-override it.
     _IPV4_TO_IPV6 = {"0.0.0.0": "::", "127.0.0.1": "::1"}
 
     async def _serve(kw: dict):
+        import logging
         servers = [uvicorn.Server(uvicorn.Config(app, **kw)).serve()]
         ipv6_host = _IPV4_TO_IPV6.get(kw.get("host", ""))
         if ipv6_host:
             kw6 = {**kw, "host": ipv6_host}
-            servers.append(uvicorn.Server(uvicorn.Config(app, **kw6)).serve())
-        await asyncio.gather(*servers, return_exceptions=True)
+            try:
+                # Quick probe: does the OS accept IPv6 sockets at all?
+                import socket as _sock
+                s = _sock.socket(_sock.AF_INET6, _sock.SOCK_STREAM)
+                s.close()
+                servers.append(uvicorn.Server(uvicorn.Config(app, **kw6)).serve())
+            except OSError:
+                logging.getLogger("wiki").warning(
+                    "IPv6 unavailable on this system — only binding IPv4 (%s). "
+                    "Use http://127.0.0.1:%d/ to avoid browser DNS fallback delay.",
+                    kw.get("host"), kw.get("port"),
+                )
+        results = await asyncio.gather(*servers, return_exceptions=True)
+        for r in results:
+            if isinstance(r, Exception):
+                logging.getLogger("wiki").error("Server error: %s", r)
 
     if sys.platform == "win32":
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
