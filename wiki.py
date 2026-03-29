@@ -28,8 +28,11 @@ def read_page(name: str) -> str | None:
 def write_page(name: str, content: str):
     p = page_path(name)
     p.parent.mkdir(parents=True, exist_ok=True)
+    # Normalise line endings: browsers send \r\n; Python text-mode write on
+    # Windows would then double-expand \r\n → \r\r\n, blowing up blank lines.
+    content = content.replace("\r\n", "\n").replace("\r", "\n")
     tmp = p.with_suffix(".tmp")
-    tmp.write_text(content, encoding="utf-8")
+    tmp.write_text(content, encoding="utf-8", newline="\n")
     tmp.replace(p)
 
 def strip_meta(src: str) -> tuple[str, int]:
@@ -359,6 +362,8 @@ async def edit_section_post(name: str, idx: int, content: str = Form("")):
     if idx >= len(h2_indices):
         return HTMLResponse("Section not found", 400)
     sections[h2_indices[idx]] = content
+    # Ensure removed sections end with \n so the next heading stays on its own line
+    sections = [s if s.endswith("\n") else s + "\n" for s in sections[:-1]] + [sections[-1]]
     write_page(name, "".join(sections))
     return RedirectResponse(f"/wiki/{name}", status_code=303)
 
@@ -508,13 +513,17 @@ def search(q: str = ""):
 
 @app.get("/delete/{name:path}", response_class=HTMLResponse)
 def delete_get(name: str):
+    try:
+        page_path(name)  # validate name; raises ValueError on bad input
+    except ValueError:
+        return HTMLResponse("Invalid page name", 400)
     body = (f'<div class="layout"><div class="content">'
             f'<h1>Delete page</h1>'
             f'<div class="notice">Are you sure you want to delete <strong>{html.escape(name)}</strong>?</div>'
             f'<form method="post" style="margin-top:.8rem">'
             f'<input type="hidden" name="confirm" value="yes">'
             f'<button type="submit" style="background:#c0392b;color:#fff;border-color:#a93226">Yes, delete</button>'
-            f'&nbsp;<a href="/wiki/{name}">Cancel</a>'
+            f'&nbsp;<a href="/wiki/{html.escape(name)}">Cancel</a>'
             f'</form></div></div>')
     return HTMLResponse(shell(f"Delete — {name}", body))
 
