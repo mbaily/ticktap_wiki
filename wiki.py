@@ -157,10 +157,10 @@ def parse(src: str, name: str = "", section_edit: bool = True) -> tuple[str, lis
             out.append(f'<p class="todo"><input type="checkbox"{checked} data-line="{i + meta_offset}" data-name="{html.escape(name)}"> {text}</p>')
             continue
 
-        # lists
-        lm = re.match(r"^( *)([*\-]) (.+)", line)
+        # lists — DokuWiki requires minimum 2-space indent; 2 spaces = top-level
+        lm = re.match(r"^( {2,})([*\-]) (.+)", line)
         if lm:
-            indent = len(lm.group(1)) // 2
+            indent = max(0, len(lm.group(1)) // 2 - 1)
             tag = "ul" if lm.group(2) == "*" else "ol"
             text = parse_inline(lm.group(3), cur_ns)
             while len(list_stack) > indent + 1:
@@ -187,13 +187,16 @@ def parse(src: str, name: str = "", section_edit: bool = True) -> tuple[str, lis
 
 
 def split_sections(src: str) -> list[str]:
-    """Split on ===== (h2) headings, keeping the heading with its content.
-    Lines inside fenced code blocks are never treated as section boundaries."""
+    """Split on ===== Title ===== (h2) headings, keeping the heading with its
+    content. Only fully-formed symmetric headings are split points, matching the
+    same pattern that parse() uses. Lines inside fenced code blocks are ignored."""
+    # Matches a complete h2 heading (===== ... =====) or a ``` fence toggle
+    MARKER = re.compile(r"(?m)^(```|===== .+? =====\s*$)")
     parts = []
     last = 0
     in_code = False
-    for m in re.finditer(r"(?m)^(```|===== )", src):
-        if m.group(1) == "```":
+    for m in MARKER.finditer(src):
+        if m.group(1).startswith("```"):
             in_code = not in_code
         elif not in_code and m.start() != last:
             parts.append(src[last:m.start()])
@@ -295,7 +298,10 @@ def dir_listing(d: Path, prefix: str) -> str:
             items += f'<li>&#128193; <a href="/ns/{rel}">{html.escape(child.name)}/</a></li>'
         elif child.suffix == ".wiki" and not child.name.startswith("_"):
             pname = f"{prefix}/{child.stem}" if prefix else child.stem
-            mtime = time.strftime("%Y-%m-%d", time.localtime(child.stat().st_mtime))
+            try:
+                mtime = time.strftime("%Y-%m-%d", time.localtime(child.stat().st_mtime))
+            except OSError:
+                mtime = "unknown"
             items += f'<li>&#128196; <a href="/wiki/{pname}">{html.escape(child.stem)}</a> <small style="color:#888">{mtime}</small></li>'
     return items + "</ul>"
 
@@ -317,7 +323,10 @@ def view(name: str):
                 f'<a href="/edit/{name}">create it?</a></div></div></div>')
         return HTMLResponse(shell(name, body), 200)
     rendered, headings = parse(src, name)
-    mtime = time.strftime("%Y-%m-%d %H:%M", time.localtime(page_path(name).stat().st_mtime))
+    try:
+        mtime = time.strftime("%Y-%m-%d %H:%M", time.localtime(page_path(name).stat().st_mtime))
+    except OSError:
+        mtime = "unknown"
     toolbar = (f'<div class="toolbar">{breadcrumb(name)}'
                f'<span style="margin-left:auto;font-size:.8rem;color:#666">Modified: {mtime}</span>'
                f'<a href="/edit/{name}">[edit page]</a>'
@@ -479,7 +488,10 @@ def sitemap():
                 s += f'<li>&#128193; <a href="/ns/{rel}"><strong>{html.escape(child.name)}/</strong></a>{tree(child, rel)}</li>'
             elif child.suffix == ".wiki" and not child.name.startswith("_"):
                 pname = f"{prefix}/{child.stem}" if prefix else child.stem
-                mtime = time.strftime("%Y-%m-%d", time.localtime(child.stat().st_mtime))
+                try:
+                    mtime = time.strftime("%Y-%m-%d", time.localtime(child.stat().st_mtime))
+                except OSError:
+                    mtime = "unknown"
                 s += f'<li>&#128196; <a href="/wiki/{pname}">{html.escape(child.stem)}</a> <small style="color:#888">{mtime}</small></li>'
         return s + "</ul>"
     body = f'<div class="layout"><div class="content sitemap"><h1>Site Map</h1>{tree(PAGES_DIR, "")}</div></div>'
@@ -500,7 +512,7 @@ def search(q: str = ""):
             if q.lower() in line.lower():
                 pname = str(f.relative_to(PAGES_DIR).with_suffix("")).replace("\\", "/")
                 snippet = html.escape(line.strip()[:120])
-                results.append(f'<div class="search-result"><a href="/wiki/{pname}">{html.escape(pname)}</a>'
+                results.append(f'<div class="search-result"><a href="/wiki/{html.escape(pname)}">{html.escape(pname)}</a>'
                                 f'<br><span class="snippet">&hellip;{snippet}&hellip;</span></div>')
                 break
     body = (f'<div class="layout"><div class="content">'
@@ -573,7 +585,7 @@ This is your personal wiki. Edit this page to get started.
 PAGES_DIR.mkdir(parents=True, exist_ok=True)
 home = PAGES_DIR / "Home.wiki"
 if not home.exists():
-    home.write_text(WELCOME, encoding="utf-8")
+    home.write_text(WELCOME, encoding="utf-8", newline="\n")
 
 if __name__ == "__main__":
     uvicorn.run(app, host=HOST, port=PORT, reload=False)
