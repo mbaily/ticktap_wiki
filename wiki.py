@@ -1556,14 +1556,25 @@ CONFIGURATION
         kwargs["ssl_certfile"] = TLS_CERT_FILE
         kwargs["ssl_keyfile"]  = TLS_KEY_FILE
     import asyncio
+
+    # On Windows, browsers resolve "localhost" to ::1 (IPv6) first; if the
+    # server only listens on 0.0.0.0 (IPv4) the IPv6 probe times out (~1 s)
+    # before falling back to 127.0.0.1.  Fix: run a companion IPv6 server on
+    # the same port so both address families are served immediately.
+    # Also: ProactorEventLoop raises ConnectionResetError (WinError 10054) on
+    # idle keep-alive teardown, stalling the event loop.  SelectorEventLoop
+    # avoids this; we must set the policy before asyncio.run() and bypass
+    # uvicorn.run() which calls setup_event_loop() internally and would override it.
+    _IPV4_TO_IPV6 = {"0.0.0.0": "::", "127.0.0.1": "::1"}
+
+    async def _serve(kw: dict):
+        servers = [uvicorn.Server(uvicorn.Config(app, **kw)).serve()]
+        ipv6_host = _IPV4_TO_IPV6.get(kw.get("host", ""))
+        if ipv6_host:
+            kw6 = {**kw, "host": ipv6_host}
+            servers.append(uvicorn.Server(uvicorn.Config(app, **kw6)).serve())
+        await asyncio.gather(*servers, return_exceptions=True)
+
     if sys.platform == "win32":
-        # ProactorEventLoop raises ConnectionResetError (WinError 10054) when an
-        # idle keep-alive connection is closed by the browser, stalling the next
-        # request.  Set SelectorEventLoop policy first, then bypass uvicorn's
-        # internal setup_event_loop() (which can re-override it) by calling
-        # asyncio.run() ourselves so the policy is honoured.
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-        _cfg = uvicorn.Config(app, **kwargs)
-        asyncio.run(uvicorn.Server(_cfg).serve())
-    else:
-        uvicorn.run(app, **kwargs)
+    asyncio.run(_serve(kwargs))
