@@ -1555,10 +1555,15 @@ CONFIGURATION
     if HTTPS_ENABLED:
         kwargs["ssl_certfile"] = TLS_CERT_FILE
         kwargs["ssl_keyfile"]  = TLS_KEY_FILE
-    # On Windows, the default ProactorEventLoop raises ConnectionResetError during
-    # normal keep-alive connection teardown (WinError 10054), which also stalls
-    # responses. Switching to SelectorEventLoop avoids the bug entirely.
     import asyncio
     if sys.platform == "win32":
+        # ProactorEventLoop raises ConnectionResetError (WinError 10054) when an
+        # idle keep-alive connection is closed by the browser, stalling the next
+        # request.  Set SelectorEventLoop policy first, then bypass uvicorn's
+        # internal setup_event_loop() (which can re-override it) by calling
+        # asyncio.run() ourselves so the policy is honoured.
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-    uvicorn.run(app, **kwargs)
+        _cfg = uvicorn.Config(app, **kwargs)
+        asyncio.run(uvicorn.Server(_cfg).serve())
+    else:
+        uvicorn.run(app, **kwargs)
