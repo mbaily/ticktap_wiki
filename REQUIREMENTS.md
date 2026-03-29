@@ -110,6 +110,29 @@ code here
 
 `----` (four dashes on their own line) → `<hr>`.
 
+### 3.9 Image Embedding
+
+```
+{{filename.png|alt text}}
+{{ns:filename.png|alt text}}
+```
+
+- Double-brace syntax embeds the image inline (`<img>`).
+- Namespace prefix uses `:` as separator, resolved against `FILES_DIR`.
+- If the file does not exist the placeholder `📄 alt text` is shown instead.
+- `alt text` is optional.
+
+### 3.10 File Links
+
+```
+[[file:filename.pdf|label]]
+[[file:ns:filename.pdf|label]]
+```
+
+- `file:` prefix renders a download anchor (`<a href="/files/…">`) rather than embedding.
+- Used automatically for non-image attachments (pdf, txt, md, csv, zip).
+- Falls back to styled broken-file indicator if the target does not exist.
+
 ---
 
 ## 4. Page Storage
@@ -128,6 +151,18 @@ code here
 - `Home` (root namespace) is the default landing page.
 - Each namespace directory may contain a special `_index.wiki` page that is shown when browsing the namespace.
 
+### 4.1 Environment Variables
+
+All path/host/port settings can be overridden at runtime via environment variables:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `WIKI_PAGES_DIR` | `pages` | Directory for `.wiki` page files |
+| `WIKI_FILES_DIR` | `files` | Directory for uploaded attachments |
+| `WIKI_ATTIC_DIR` | `attic` | Directory for version snapshots |
+| `WIKI_HOST` | `0.0.0.0` | Listening host address |
+| `WIKI_PORT` | `8080` | Listening port |
+
 ---
 
 ## 5. Server Endpoints
@@ -142,14 +177,30 @@ code here
 | GET | `/wiki/{name:path}` | Render page (`:path` allows slashes) |
 | GET | `/edit/{name:path}` | Full-page edit form |
 | POST | `/edit/{name:path}` | Save full page |
-| GET | `/edit/{name:path}/section/{idx}` | Edit single section by heading index |
-| POST | `/edit/{name:path}/section/{idx}` | Save single section back into page |
+| GET | `/sect/{name:path}/{idx}` | Edit single section by heading index |
+| POST | `/sect/{name:path}/{idx}` | Save single section back into page |
 | POST | `/toggle/{name:path}/{line}` | Toggle checkbox state (AJAX, no page reload) |
+| POST | `/preview` | Render preview HTML (AJAX, returns fragment) |
 | GET | `/new` | Create new page form |
-| GET | `/ns/{ns:path}` | Browse a namespace (list pages + sub-namespaces) |
+| GET | `/ns/{ns:path}` | Browse a namespace (list pages + sub-namespaces + attached files) |
 | GET | `/sitemap` | Site map: tree of all pages and namespaces |
 | GET | `/search?q={query}` | Full-text search results page |
+| GET | `/delete/{name:path}` | Delete confirmation page |
 | POST | `/delete/{name:path}` | Delete a page (with confirmation) |
+| GET | `/history/{name:path}` | List version snapshots for a page |
+| GET | `/history/{name:path}?snap={id}` | View a specific snapshot (read-only) |
+| POST | `/restore/{name:path}` | Restore page to a saved snapshot |
+| GET | `/upload` | File upload form (root namespace) |
+| GET | `/upload/{ns:path}` | File upload form (specific namespace) |
+| POST | `/upload` | Upload files to root namespace |
+| POST | `/upload/{ns:path}` | Upload files to a namespace |
+| GET | `/files/{filepath:path}` | Serve an uploaded file |
+| POST | `/file-delete/{filepath:path}` | Delete an uploaded file |
+| GET | `/orphans` | List uploaded files not referenced by any wiki page |
+| GET | `/login` | Login form |
+| POST | `/login` | Authenticate and issue session token |
+| GET | `/logout` | Revoke session token and redirect to login |
+| GET | `/favicon.ico` | Serve embedded favicon |
 
 ---
 
@@ -159,7 +210,7 @@ The default view for every page. Raw markup is never shown here.
 
 - Renders the full page as HTML with all markup interpreted.
 - **Navigation bar** (top): wiki name/logo, search box, **[new page]** button.
-- **Page toolbar** (below nav): page name, last-modified timestamp, **[edit page]** button.
+- **Page toolbar** (below nav): page name, last-modified timestamp, **[edit page]**, **[history]**, and **[delete]** buttons.
 - **Table of Contents sidebar** (right side): auto-generated from all headings on the page; floated to the right of the page body.
   - Each entry is an `<a href="#anchor">` jump link to the corresponding heading.
   - Entries are indented to reflect heading level (h1 → h2 → h3).
@@ -197,6 +248,115 @@ A separate, dedicated editing mode — never mixed into the reader view.
 - Search results page lists matching pages with the matched line shown as a snippet.
 - Consistent header across both views; active mode (read / edit) visually indicated.
 - No JavaScript framework — vanilla JS only for checkbox toggle and section editor toggle.
+
+---
+
+## 9. Authentication
+
+- Controlled by `AUTH_ENABLED` flag (default: `True`). When `False`, all routes are publicly accessible.
+- Credentials stored in an Apache-compatible htpasswd file (path: `HTPASSWD_FILE`, default `.htpasswd`). Only bcrypt hashes are supported.
+- On login, the server issues a random hex token (256-bit) stored in a server-side JSON file (`.wiki_tokens`).
+- Token is delivered as an `HttpOnly`, `SameSite=Strict` cookie (`wiki_token`); also accepted as a query parameter or `Authorization: Bearer` header.
+- Token lifetime: `TOKEN_EXPIRY_DAYS` days (default: 30). Expired tokens are pruned on each new login.
+- All protected routes use a FastAPI `require_auth` dependency; unauthenticated requests are redirected to `/login?next=<original-url>`.
+- Login page (`GET /login`) shows username/password form. `POST /login` validates credentials and sets the cookie, then redirects to the `next` URL. Only paths starting with `/` (not `//`) are followed to prevent open redirects.
+- `GET /logout` revokes the current token and clears the cookie.
+- **Rate limiting**: max 5 failed attempts per IP in a 60-second rolling window; returns HTTP 429 on lockout.
+- `--adduser USERNAME` CLI flag creates or updates a bcrypt entry in the htpasswd file interactively.
+
+---
+
+## 10. HTTPS / TLS
+
+- Controlled by `HTTPS_ENABLED` flag (default: `True`).
+- When enabled, Uvicorn is started with `ssl_certfile`/`ssl_keyfile` from `TLS_CERT_FILE`/`TLS_KEY_FILE` (defaults: `cert.pem` / `key.pem`).
+- Missing cert or key files cause a startup error with a clear message.
+- The login cookie `Secure` attribute is set only when `HTTPS_ENABLED=True`.
+- `--gencert` CLI flag generates a self-signed RSA-2048 certificate using the `cryptography` package. Options: `--cert`, `--key`, `--days` (default 3650), `--cn` (default `localhost`). Always includes `localhost` and `127.0.0.1` as SAN entries.
+
+---
+
+## 11. Dark Mode
+
+- Controlled by `DARK_MODE` flag (default: `True`).
+- When enabled, an additional `<style>` block (`CSS_DARK`) is injected into every page overriding the light-mode palette.
+- Dark colours use a deep navy scheme (`#1a1a2e` background, `#cdd` text, `#8ab4f8` links).
+
+---
+
+## 12. Page Versioning
+
+- Controlled by `VERSIONING_ENABLED` flag (default: `True`). Can also set `WIKI_ATTIC_DIR` env var.
+- On every full-page save (`write_page`), the previous version is snapshotted into `attic/<page-path>/<YYYYMMDD_HHMMSS>.wiki` before the file is overwritten. Checkbox toggles do **not** create snapshots.
+- Snapshots are pruned after saving using an **exponential retention** algorithm:
+  - Parameters: `VERSION_BASE_SECS = 30` (T) and `VERSION_SLOTS = 10` (K).
+  - Maximum retained age: `e^K × T` seconds.
+  - For snapshots older than T seconds, only the newest in each age band `[e^i×T, e^(i+1)×T)` is kept (band index `i = floor(log(age/T))`).
+  - Sub-T snapshots: only the newest is kept; it ages into a band on future saves.
+- **History list** (`GET /history/{name}`): table of retained snapshots with timestamp, view link, and restore button.
+- **Snapshot view** (`GET /history/{name}?snap={id}`): read-only rendered view of the snapshot with a "Restore this version" button.
+- **Restore** (`POST /restore/{name}`): writes the snapshot content back as the current page (which itself creates a new snapshot of the page being overwritten).
+- The reader view toolbar shows a `[history]` link when versioning is enabled.
+
+---
+
+## 13. File Attachments
+
+### 13.1 Storage
+
+- Files are stored under `FILES_DIR` (default `files/`), organised by namespace: `files/<ns>/filename_<hex8>.ext`.
+- Namespace directory must match `[A-Za-z0-9_-]+` per segment; filename must match `[A-Za-z0-9_-]+\.[A-Za-z0-9]+`.
+- Path-traversal checks are applied to all file access operations.
+
+### 13.2 Allowed Types
+
+| Type | Extensions |
+|------|-----------|
+| Images | `jpg`, `jpeg`, `png`, `gif`, `webp`, `svg` |
+| Documents | `pdf`, `txt`, `md`, `csv`, `zip` |
+
+### 13.3 Size Limits
+
+- Per-file: 20 MB.
+- Per-request total: 100 MB.
+
+### 13.4 Upload
+
+- `GET /upload` and `GET /upload/{ns}` — upload form for the root or a specific namespace.
+- `POST /upload` and `POST /upload/{ns}` — accept `multipart/form-data` with multiple files.
+- Uploaded filenames are sanitised and a 4-byte hex suffix is appended to avoid collisions.
+- After upload, the page displays a table with copy-link markup for each file. Images offer a toggle between `{{embed}}` and `[[file:link]]` markup.
+
+### 13.5 Serving
+
+- `GET /files/{filepath}` — serves the file with the correct MIME type, `X-Content-Type-Options: nosniff`. SVG files additionally get `Content-Security-Policy: sandbox`.
+
+### 13.6 Deletion
+
+- `POST /file-delete/{filepath}` — deletes the file and redirects to the referer (same-host only, to prevent open redirect) or the namespace/orphans page.
+- Files can also be deleted individually from the namespace browser (`GET /ns/{ns}`) and the orphans page.
+
+### 13.7 Namespace Browser
+
+`GET /ns/{ns}` shows pages under the namespace plus a collapsible **Attached files** section listing every file with its size, modification date, markup copy button, and delete button.
+
+### 13.8 Orphaned Files
+
+`GET /orphans` scans all `.wiki` pages for `{{…}}` and `[[file:…]]` references and lists any files in `FILES_DIR` that are not referenced by any page, with size, date, preview thumbnail (non-SVG images), and a delete button.
+
+---
+
+## 14. CLI Administration
+
+Running `python wiki.py` starts the server. Additional modes:
+
+| Command | Description |
+|---------|-------------|
+| `python wiki.py --adduser USERNAME` | Interactively add or update a bcrypt password entry in the htpasswd file. |
+| `python wiki.py --adduser USERNAME --htpasswd PATH` | Use a custom htpasswd file path. |
+| `python wiki.py --gencert` | Generate a self-signed TLS certificate and private key, then exit. |
+| `python wiki.py --gencert --cert F --key F --days N --cn HOST` | Customise cert output paths, validity, and Common Name / SAN hostname. |
+
 
 ---
 
