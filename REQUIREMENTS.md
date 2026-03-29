@@ -149,7 +149,7 @@ code here
   ```
 - Page names: alphanumeric + underscores + hyphens; case-sensitive.
 - `Home` (root namespace) is the default landing page.
-- Each namespace directory may contain a special `_index.wiki` page that is shown when browsing the namespace.
+
 
 ### 4.1 Environment Variables
 
@@ -370,7 +370,6 @@ Running `python wiki.py` starts the server. Additional modes:
 - **Breadcrumb trail** in the reader/editor header reflects the full namespace path, e.g. `root > projects > alpha > Home`; each segment links to its namespace index.
 - Creating a page in a new namespace automatically creates the required directories.
 - Deleting the last page in a namespace does **not** automatically remove the directory (avoids accidental data loss).
-- `_index.wiki` in any namespace directory is shown automatically when browsing that namespace.
 
 ---
 

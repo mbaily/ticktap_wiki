@@ -796,7 +796,10 @@ async def edit_section_post(name: str, idx: int, content: str = Form(""), _auth:
     sections[h2_indices[idx]] = content
     # Ensure removed sections end with \n so the next heading stays on its own line
     sections = [s if s.endswith("\n") else s + "\n" for s in sections[:-1]] + [sections[-1]]
-    write_page(name, "".join(sections))
+    try:
+        write_page(name, "".join(sections))
+    except OSError as e:
+        return HTMLResponse(f"Save failed: {html.escape(str(e))}", 500)
     return RedirectResponse(f"/wiki/{name}", status_code=303)
 
 
@@ -817,7 +820,7 @@ def edit_get(request: Request, name: str, _auth: None = Depends(require_auth)):
             f'<button form="ef" type="submit">Save</button>'
             f'<a href="/wiki/{name}">Cancel</a>'
             f'<button type="button" onclick="showPreview()">Preview</button>'
-            f'<a href="{upload_href}" target="_blank">&#128206; Attach</a>'
+            f'<button type="button" onclick="openAttach()">&#128206; Attach</button>'
             f'</div>'
             f'<form id="ef" method="post">'
             f'<textarea name="content" rows="30" id="ed">{content}</textarea>'
@@ -830,6 +833,10 @@ def edit_get(request: Request, name: str, _auth: None = Depends(require_auth)):
             f'    body:new URLSearchParams({{name:"{name}",content:document.getElementById("ed").value}})}});'
             f'  const d=document.getElementById("pv");'
             f'  d.innerHTML=await r.text();d.style.display="block";'
+            f'}}'
+            f'function openAttach(){{'
+            f'  var pos=document.getElementById("ed").selectionStart;'
+            f'  window.open("{upload_href}?pos="+pos,"_blank");'
             f'}}'
             f'</script>')
     return HTMLResponse(shell(f"Edit — {name}", body, request=request))
@@ -873,7 +880,10 @@ async def toggle(request: Request, name: str, line: int, _auth: None = Depends(r
     if new_ln == ln:
         return HTMLResponse("ok")  # not a checkbox line
     lines[line] = new_ln
-    write_page(name, "\n".join(lines), snapshot=False)
+    try:
+        write_page(name, "\n".join(lines), snapshot=False)
+    except OSError:
+        return HTMLResponse("write failed", 500)
     return HTMLResponse("ok")
 
 
@@ -1042,9 +1052,10 @@ _FILE_MIME = {
     "csv": "text/csv",   "zip": "application/zip",
 }
 
-def _upload_page(ns: str, results: list | None, request: Request | None = None) -> HTMLResponse:
+def _upload_page(ns: str, results: list | None, request: Request | None = None, insert_pos: int = -1) -> HTMLResponse:
     ns_display = ns.replace("/", ":") if ns else "(root)"
-    action = f"/upload/{ns}" if ns else "/upload"
+    pos_qs = f"?pos={insert_pos}" if insert_pos >= 0 else ""
+    action = (f"/upload/{ns}" if ns else "/upload") + pos_qs
     res_html = ""
     if results:
         has_images = any(r.get("ok") and r.get("is_img") for r in results)
@@ -1080,14 +1091,37 @@ def _upload_page(ns: str, results: list | None, request: Request | None = None) 
             f'<p><strong>Paste into your page:</strong></p>'
             f'<textarea id="snip" rows="{max(2, snippet.count(chr(10)) + 1)}" '
             f'style="width:100%;font-family:monospace">{snip_esc}</textarea><br>'
-            f'<button onclick="navigator.clipboard.writeText(document.getElementById(\'snip\').value).then(()=>window.close())" '
-            f'style="margin:.5rem 0;padding:.4rem .8rem;cursor:pointer">&#128203; Copy links &amp; close tab</button>'
+            f'<button id="insert-btn" onclick="insertAndClose()" '
+            f'style="margin:.5rem 0;padding:.4rem .8rem;cursor:pointer">&#10549; Insert into page</button>'
             f'<script>'
+            f'var _insertPos={insert_pos};'
+            f'function insertAndClose(){{'
+            f'  var markup=document.getElementById("snip").value;'
+            f'  var ed=window.opener&&window.opener.document.getElementById("ed");'
+            f'  if(ed){{'
+            f'    var pos=(_insertPos>=0)?_insertPos:ed.selectionStart;'
+            f'    var v=ed.value;'
+            f'    var before=v.slice(0,pos);'
+            f'    var after=v.slice(pos);'
+            f'    if(before.length&&!before.endsWith("\\n")){{before+="\\n";}}'
+            f'    if(after.length&&!after.startsWith("\\n")){{markup+="\\n";}}'
+            f'    ed.value=before+markup+after;'
+            f'    ed.selectionStart=ed.selectionEnd=before.length+markup.length;'
+            f'    ed.focus();'
+            f'    document.getElementById("insert-btn").textContent="✓ Inserted!";'
+            f'    setTimeout(()=>window.close(),400);'
+            f'  }}else{{'
+            f'    /* opener gone or opened from outside edit page — copy instead */'
+            f'    navigator.clipboard.writeText(markup).catch(()=>{{}});'
+            f'    document.getElementById("insert-btn").textContent="✓ Copied to clipboard";'
+            f'  }}'
+            f'}}'
             f'function updateSnippet(){{'
             f'  var useLink=document.getElementById(\'lnk-toggle\')&&document.getElementById(\'lnk-toggle\').checked;'
             f'  var lines=[];'
             f'  document.querySelectorAll(".markup-cell").forEach(function(td){{'
-            f'    var m=(useLink&&td.dataset.isimg==="1")?td.dataset.link:td.dataset.embed;'
+            f'    var isImg=td.dataset.isimg==="1";'
+            f'    var m=(isImg&&!useLink)?td.dataset.embed:td.dataset.link;'
             f'    if(m){{td.textContent=m;lines.push(m);}}'
             f'  }});'
             f'  document.getElementById(\'snip\').value=lines.join(\'\\n\');'
@@ -1108,7 +1142,7 @@ def _upload_page(ns: str, results: list | None, request: Request | None = None) 
     )
     return HTMLResponse(shell(f"Upload \u2014 {html.escape(ns_display)}", body, request=request))
 
-async def _do_upload(ns: str, files: list[UploadFile], request: Request | None = None) -> HTMLResponse:
+async def _do_upload(ns: str, files: list[UploadFile], request: Request | None = None, insert_pos: int = -1) -> HTMLResponse:
     if ns:
         for seg in ns.strip("/").split("/"):
             if not re.fullmatch(r"[A-Za-z0-9_\-]+", seg):
@@ -1146,22 +1180,22 @@ async def _do_upload(ns: str, files: list[UploadFile], request: Request | None =
         markup = markup_embed if is_img else markup_link
         results.append({"name": f.filename, "ok": True, "markup": markup,
                         "markup_embed": markup_embed, "markup_link": markup_link, "is_img": is_img})
-    return _upload_page(ns, results, request)
+    return _upload_page(ns, results, request, insert_pos)
 
 
 @app.get("/upload", response_class=HTMLResponse)
-def upload_get_root(request: Request, _auth: None = Depends(require_auth)): return _upload_page("", None, request)
+def upload_get_root(request: Request, pos: int = -1, _auth: None = Depends(require_auth)): return _upload_page("", None, request, pos)
 
 @app.get("/upload/{ns:path}", response_class=HTMLResponse)
-def upload_get(request: Request, ns: str, _auth: None = Depends(require_auth)): return _upload_page(ns, None, request)
+def upload_get(request: Request, ns: str, pos: int = -1, _auth: None = Depends(require_auth)): return _upload_page(ns, None, request, pos)
 
 @app.post("/upload", response_class=HTMLResponse)
-async def upload_post_root(request: Request, files: list[UploadFile] = File(default=[]), _auth: None = Depends(require_auth)):
-    return await _do_upload("", files, request)
+async def upload_post_root(request: Request, pos: int = -1, files: list[UploadFile] = File(default=[]), _auth: None = Depends(require_auth)):
+    return await _do_upload("", files, request, pos)
 
 @app.post("/upload/{ns:path}", response_class=HTMLResponse)
-async def upload_post(request: Request, ns: str, files: list[UploadFile] = File(default=[]), _auth: None = Depends(require_auth)):
-    return await _do_upload(ns, files, request)
+async def upload_post(request: Request, ns: str, pos: int = -1, files: list[UploadFile] = File(default=[]), _auth: None = Depends(require_auth)):
+    return await _do_upload(ns, files, request, pos)
 
 
 @app.get("/files/{filepath:path}")
