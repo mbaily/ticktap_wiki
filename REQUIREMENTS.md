@@ -262,7 +262,6 @@ A separate, dedicated editing mode — never mixed into the reader view.
 
 - User authentication or access control.
 - Version history / diff / rollback.
-- File or image uploads.
 - Tables in markup.
 - Plugin or extension system.
 - Multi-user conflict resolution.
@@ -271,9 +270,109 @@ A separate, dedicated editing mode — never mixed into the reader view.
 
 ---
 
-## 15. Open Questions
+## 15. File & Image Uploads
 
-1. **Heading syntax**: keep DokuWiki-style `=` or switch to Markdown `#` to reuse `mistune`/`markdown-it` and save ~40 parser LOC?
-2. **Checkbox persistence**: toggle in-place inside the `.wiki` file (mutates source) or sidecar `.state` file?
-3. **highlight.js**: CDN include (zero LOC, requires internet) or omit syntax highlighting to stay fully offline?
+### 15.1 Goals
+
+- Upload one or many files in a single operation without leaving the editor.
+- Files land in the correct namespace directory automatically (derived from the current page being edited).
+- Every uploaded file immediately gets a link/embed inserted into the editor textarea — no manual copy-pasting of URLs.
+- The original filename is used as the link label so the inserted markup is human-readable.
+- Files are stored with a unique name to prevent collisions when re-uploading a file with the same name.
+
+### 15.2 File Storage
+
+- Files stored in a `files/` directory tree **separate** from `pages/`, at the same level:
+  ```
+  wiki-root/
+    pages/
+    files/
+  ```
+- Namespace-scoped sub-directories mirror the page namespace: uploading while editing `projects/alpha/Notes` stores into `files/projects/alpha/`.
+- **Unique naming:** the original filename is preserved but a short random hex suffix (8 characters) is inserted before the extension to prevent collisions:
+  - `photo.jpg` → `photo_a3b2c1d4.jpg`
+  - `report.pdf` → `report_9f01e234.pdf`
+  - The original stem is retained for human readability; the suffix guarantees uniqueness.
+- Filename characters are sanitised to `[A-Za-z0-9_.-]` only; any other characters in the original name are replaced with `_`.
+
+### 15.3 New Endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/files/{ns:path}/{filename}` | Serve the raw file with the correct `Content-Type` |
+| GET | `/upload/{ns:path}` | Standalone upload page (reachable from namespace index and editor) |
+| POST | `/upload/{ns:path}` | Accept `multipart/form-data`; save all uploaded files; return page |
+
+- `{ns:path}` is the namespace path (may be empty for root).
+- On `POST /upload`, the response renders the same upload page again, showing a results table and the generated markup snippet ready to copy, **and** a button to jump back to the editor with the markup already appended into the textarea.
+
+### 15.4 Upload UI in the Editor
+
+The editor toolbar gains an **[attach files]** button that:
+
+1. Opens the `/upload/{ns}` page in a **new browser tab** (keeps the editor intact in the original tab).
+2. On successful upload the upload page shows a **"Copy links & return to editor"** button that:
+   - Writes all generated markup snippets to the clipboard.
+   - Closes the upload tab.
+3. The user pastes the markup into the editor at the desired position.
+
+> **Why not an in-page popup?** Keeping it a separate page avoids complex JS, keeps the single-file constraint practical, and means uploads work even if the editor has unsaved content.
+
+### 15.5 Generated Markup per File
+
+After upload, the server inserts markup for each file in the results list and presents a **single combined snippet** ready to paste:
+
+| File type | Inserted markup | Rendered result |
+|-----------|----------------|----------------|
+| Image (`.jpg .jpeg .png .gif .webp .svg`) | `{{ns:unique_name.jpg\|original name}}` | Inline `<img>` with the original filename as `alt` |
+| Any other file | `[[file:ns:unique_name.pdf\|original name]]` | Download link labelled with the original filename |
+
+- Multiple uploaded files produce one snippet line per file, in upload order.
+- The namespace prefix in the markup is relative: if uploading into the same namespace as the current page the `ns:` prefix can be omitted; the upload page always uses the full absolute path for safety.
+
+### 15.6 New Markup Syntax
+
+Two new constructs added to the parser:
+
+**Embedded media** (images only):
+```
+{{filename.jpg}}
+{{ns:filename.jpg|Alt text}}
+```
+→ `<img src="/files/{ns}/{filename}" alt="Alt text" style="max-width:100%">`  
+If `alt` is omitted, the filename (without extension) is used.
+
+**File download link**:
+```
+[[file:filename.pdf|Report Q1]]
+[[file:ns:filename.pdf]]
+```
+→ `<a href="/files/{ns}/{filename}">Report Q1</a>` with a 📎 icon prepended.
+
+- Namespace resolution follows the same rules as wiki page links (relative to current page namespace; `:` prefix for root).
+- Non-existent files render as a broken-link style span (styled like `.new-page`) rather than a dead `href`.
+
+### 15.7 Security Constraints
+
+- **Extension allow-list**: only accept `jpg jpeg png gif webp svg pdf txt md csv zip` (case-insensitive). Any other extension returns HTTP 400. This prevents executable uploads.
+- **MIME sniffing disabled**: all served files carry `X-Content-Type-Options: nosniff`.
+- **SVG served as `image/svg+xml`** but with `Content-Security-Policy: sandbox` to neutralise embedded scripts.
+- **Max file size**: 20 MB per file; 100 MB total per request. Exceeding this returns HTTP 413 with a clear message.
+- **Path validation**: the resolved `files/{ns}/{filename}` path must lie within the `files/` root before any read or write (same traversal-check pattern as `page_path`).
+- **No directory listing**: `GET /files/{ns}/` (without a filename) returns 404.
+- Files are **never executed** — only read and streamed as bytes.
+
+### 15.8 Namespace Index Integration
+
+- `GET /ns/{ns}` lists attached files below the page list, in a collapsible section.
+- Each entry shows filename, size, upload date, a copy-link button, and a delete button.
+- A **[attach files]** shortcut button on the namespace index page links to `GET /upload/{ns}`.
+
+---
+
+## 16. Open Questions
+
+1. ~~**Heading syntax**: keep DokuWiki-style `=` or switch to Markdown `#` to reuse `mistune`/`markdown-it` and save ~40 parser LOC?~~ **Resolved: DokuWiki `=` syntax kept.** Preserves DokuWiki compatibility; the LOC saving argument became moot as the codebase grew.
+2. ~~**Checkbox persistence**: toggle in-place inside the `.wiki` file (mutates source) or sidecar `.state` file?~~ **Resolved: mutates the source file directly.** The toggle endpoint rewrites the `.wiki` file with the checkbox state changed on the relevant line; `data-line` in the HTML tracks the exact line number (adjusted for META header offset).
+3. ~~**highlight.js**: CDN include (zero LOC, requires internet) or omit syntax highlighting to stay fully offline?~~ **Resolved: omitted.** Code blocks emit `<pre><code class="language-{lang}">` with the language class but no highlighter is loaded. The wiki runs fully offline.
 4. **Search**: substring scan is simple but slow at scale — acceptable for a personal wiki?
