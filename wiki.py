@@ -98,7 +98,11 @@ def _save_snapshot(name: str, content: str):
     d.mkdir(parents=True, exist_ok=True)
     ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     snap = d / f"{ts}.wiki"
-    snap.write_text(content, encoding="utf-8", newline="\n")
+    if snap.exists():
+        return  # same-second save: keep the first snapshot of this second
+    tmp = snap.with_suffix(".tmp")
+    tmp.write_text(content, encoding="utf-8", newline="\n")
+    tmp.replace(snap)
 
 def _prune_attic(name: str):
     d = _attic_page_dir(name)
@@ -118,9 +122,9 @@ def _prune_attic(name: str):
             f.unlink(missing_ok=True)
             continue
         entries.append((dt, age, f))
-    # Keep all snapshots younger than T (not yet old enough to band)
-    # For the rest, keep only the newest snapshot in each band
-    # Band i covers [e^i * T, e^(i+1) * T); band index = floor(log(age / T))
+    # Keep only the newest snapshot younger than T (will age into a band on future saves).
+    # For snapshots >= T, keep only the newest in each band [e^i*T, e^(i+1)*T).
+    # Band i: floor(log(age / T)), capped at K-1.
     band_newest: dict[int, tuple] = {}
     for dt, age, f in entries:
         if age < T:
