@@ -160,8 +160,10 @@ def slug(text: str) -> str:
 # ── markup parser ──────────────────────────────────────────────────────────────
 
 def parse_inline(text: str, cur_ns: str = "") -> str:
-    # Stash [[links]] as null-byte placeholders so inline patterns
-    # (especially //italic//) cannot match across URL double-slashes.
+    # Stash [[links]] and {{media}} as null-byte placeholders so inline
+    # patterns (especially //italic//) cannot match across URL double-slashes.
+    # Non-greedy is correct: wiki syntax forbids nesting, so the first closing
+    # delimiter always ends the token.
     stash: list[str] = []
     def stash_link(m):
         stash.append(m.group(0))
@@ -293,7 +295,7 @@ def parse(src: str, name: str = "", section_edit: bool = True) -> tuple[str, lis
             if level == 2 and section_edit and name:
                 edit_btn = f' <a class="sect-edit" href="/sect/{name}/{h2_count}">[edit]</a>'
                 h2_count += 1
-            out.append(f'<h{level} id="{anchor}">{html.escape(text)}{edit_btn}</h{level}>')
+            out.append(f'<h{level} id="{anchor}" data-line="{i + meta_offset}">{html.escape(text)}{edit_btn}</h{level}>')
             continue
 
         # todo checkboxes
@@ -302,7 +304,7 @@ def parse(src: str, name: str = "", section_edit: bool = True) -> tuple[str, lis
             close_lists()
             state, text = cbm.group(2), parse_inline(cbm.group(3), cur_ns)
             checked = " checked" if state == "x" else ""
-            out.append(f'<p class="todo"><input type="checkbox"{checked} data-line="{i + meta_offset}" data-name="{html.escape(name)}"> {text}</p>')
+            out.append(f'<p class="todo" data-line="{i + meta_offset}"><input type="checkbox"{checked} data-line="{i + meta_offset}" data-name="{html.escape(name)}"> {text}</p>')
             continue
 
         # lists — DokuWiki requires minimum 2-space indent; 2 spaces = top-level
@@ -317,14 +319,14 @@ def parse(src: str, name: str = "", section_edit: bool = True) -> tuple[str, lis
                 out.append(f"</{list_stack.pop()[1]}>")
             while len(list_stack) <= indent:
                 list_stack.append((len(list_stack), tag)); out.append(f"<{tag}>")
-            out.append(f"<li>{text}</li>")
+            out.append(f'<li data-line="{i + meta_offset}">{text}</li>')
             continue
 
         close_lists()
         if line.strip() == "":
             out.append("")
         else:
-            out.append(f"<p>{parse_inline(line, cur_ns)}</p>")
+            out.append(f'<p data-line="{i + meta_offset}">{parse_inline(line, cur_ns)}</p>')
 
     close_lists()
     # emit any unclosed fenced code block at EOF
@@ -389,6 +391,8 @@ input[type=checkbox]{cursor:pointer;width:1.1em;height:1.1em;vertical-align:midd
 .sitemap ul{list-style:none;padding-left:1.2rem}.sitemap>ul{padding-left:0}
 .broken-file{color:#c0392b;font-style:italic}
 .content img{max-width:100%;height:auto}
+.content [data-line]:hover{box-shadow:inset 3px 0 0 #3498db}
+.content [data-line].qtodo-sel{outline:2px solid #3498db;outline-offset:2px;border-radius:2px;background:rgba(52,152,219,.07)}
 .login-box{max-width:360px;margin:3rem auto;background:#fff;border:1px solid #ddd;border-radius:6px;padding:2rem}
 .login-box h1{font-size:1.3rem;margin-bottom:1rem}
 .login-box input[type=text],.login-box input[type=password]{width:100%;padding:.4rem .6rem;margin:.3rem 0 .8rem;border:1px solid #ccc;border-radius:4px;font-size:1rem}
@@ -754,7 +758,89 @@ def view(request: Request, name: str, _auth: None = Depends(require_auth)):
                f'<a href="/edit/{name}">[edit page]</a>'
                + (f'<a href="/history/{name}">[history]</a>' if VERSIONING_ENABLED else '') +
                f'<a href="/delete/{name}" style="color:#c0392b">[delete]</a></div>')
-    body = f'{toolbar}<div class="layout"><div class="content">{rendered}</div>{toc_html(headings)}</div>'
+    todo_bar = (
+        f'<div id="qtodo-bar" style="display:none;position:fixed;bottom:0;left:0;right:0;'
+        f'background:#2c3e50;color:#fff;padding:.5rem 1rem;align-items:center;'
+        f'gap:.5rem;z-index:100;flex-wrap:wrap;box-shadow:0 -3px 10px rgba(0,0,0,.25)">'
+        f'<span style="font-size:.85rem;white-space:nowrap">After: '
+        f'<em id="qtodo-preview" style="font-style:normal;color:#8ab4f8;max-width:220px;'
+        f'overflow:hidden;text-overflow:ellipsis;white-space:nowrap;'
+        f'display:inline-block;vertical-align:middle"></em></span>'
+        f'<div style="display:flex;flex:1;gap:.5rem;flex-wrap:wrap;align-items:center">'
+        f'<input type="text" id="qtodo-text" autocomplete="off" '
+        f'placeholder="Todo description\u2026" style="flex:1;min-width:160px;padding:.35rem .6rem;'
+        f'border-radius:3px;border:none;font-size:.9rem">'
+        f'<button id="qtodo-add" onclick="qtodoSubmit()" style="padding:.35rem .7rem;border-radius:3px;border:none;'
+        f'cursor:pointer;background:#27ae60;color:#fff;white-space:nowrap">&#10010; Add</button>'
+        f'<button type="button" onclick="qtodoCancel()" style="padding:.35rem .6rem;'
+        f'border-radius:3px;border:1px solid #777;cursor:pointer;background:none;color:#ddd">&times;</button>'
+        f'</div></div>'
+        f'<script>'
+        f'var _qtodoEl=null,_qtodoLine=-1;'
+        f'function qtodoSelect(el){{'
+        f'if(_qtodoEl)_qtodoEl.classList.remove("qtodo-sel");'
+        f'_qtodoEl=el;_qtodoLine=parseInt(el.dataset.line,10);'
+        f'el.classList.add("qtodo-sel");'
+        f'var p=(el.dataset.isimg?el.getAttribute("alt"):null)||el.innerText.replace(/^\\s*\\[.\\]\\s*/,"").replace(/\\s+/g," ").trim();'
+        f'if(p.length>50)p=p.slice(0,50)+"\u2026";'
+        f'document.getElementById("qtodo-preview").textContent=p;'
+        f'document.getElementById("qtodo-bar").style.display="flex";'
+        f'var inp=document.getElementById("qtodo-text");inp.value="";inp.focus();'
+        f'}}'
+        f'function qtodoCancel(){{'
+        f'if(_qtodoEl)_qtodoEl.classList.remove("qtodo-sel");'
+        f'_qtodoEl=null;_qtodoLine=-1;'
+        f'document.getElementById("qtodo-bar").style.display="none";'
+        f'}}'
+        f'async function qtodoSubmit(){{'
+        f'var text=document.getElementById("qtodo-text").value.trim();'
+        f'if(!text||_qtodoLine<0)return;'
+        f'var btn=document.getElementById("qtodo-add");'
+        f'btn.disabled=true;'
+        f'try{{'
+        f'var resp=await fetch("/add-todo/{html.escape(name)}",{{'
+        f'  method:"POST",'
+        f'  headers:{{"Content-Type":"application/json"}},'
+        f'  body:JSON.stringify({{after_line:_qtodoLine,text:text}})'
+        f'}});'
+        f'var data=await resp.json();'
+        f'if(!resp.ok||!data.ok){{alert(data.error||"Save failed");btn.disabled=false;return;}}'
+        f'/* Insert new todo element after the selected block */'
+        f'var newEl=document.createElement("p");'
+        f'newEl.className="todo";'
+        f'newEl.dataset.line=data.line;'
+        f'var cb=document.createElement("input");'
+        f'cb.type="checkbox";cb.dataset.line=data.line;cb.dataset.name="{html.escape(name)}";'
+        f'cb.addEventListener("change",function(){{'
+        f'  fetch("/toggle/{html.escape(name)}/"+cb.dataset.line,{{method:"POST"}});'
+        f'}});'
+        f'newEl.appendChild(cb);'
+        f'newEl.appendChild(document.createTextNode(" "+text));'
+        f'/* find the block-level ancestor inside .content to insert after */'
+        f'var anchor=_qtodoEl;'
+        f'var content=document.querySelector(".content");'
+        f'while(anchor.parentElement&&anchor.parentElement!==content)anchor=anchor.parentElement;'
+        f'anchor.insertAdjacentElement("afterend",newEl);'
+        f'newEl.style.background="rgba(39,174,96,.15)";'
+        f'setTimeout(function(){{newEl.style.background="";}},800);'
+        f'qtodoCancel();'
+        f'}}catch(e){{alert("Network error");}}'
+        f'finally{{btn.disabled=false;}}'
+        f'}}'
+        f'document.addEventListener("keydown",function(e){{'
+        f'if(e.key==="Enter"&&document.activeElement&&document.activeElement.id==="qtodo-text"){{e.preventDefault();qtodoSubmit();}}'
+        f'if(e.key==="Escape")qtodoCancel();'
+        f'}});'
+        f'document.addEventListener("DOMContentLoaded",function(){{'
+        f'document.querySelector(".content").addEventListener("click",function(e){{'
+        f'var t=e.target;'
+        f'while(t&&t!==this){{if(t.tagName==="A")return;if(t.tagName==="INPUT"&&t.type==="checkbox")return;t=t.parentElement;}}'
+        f'var el=e.target;'
+        f'while(el&&el!==this){{if(el.dataset&&el.dataset.line!==undefined){{qtodoSelect(el);return;}}el=el.parentElement;}}'
+        f'}});}});'
+        f'</script>'
+    )
+    body = f'{toolbar}{todo_bar}<div class="layout"><div class="content">{rendered}</div>{toc_html(headings)}</div>'
     return HTMLResponse(shell(name.split("/")[-1], body, request=request))
 
 
@@ -869,22 +955,59 @@ async def toggle(request: Request, name: str, line: int, _auth: None = Depends(r
         return HTMLResponse("Invalid page name", 400)
     if src is None:
         return HTMLResponse("Not found", 404)
-    lines = src.split("\n")
+    lines = src.splitlines(keepends=True)
     if line >= len(lines):
         return HTMLResponse("Out of range", 400)
-    ln = lines[line]
+    ln = lines[line].rstrip("\r\n")
     # Target only the leading checkbox marker to avoid matching [x] inside the text
     new_ln = re.sub(r"^(\s*)\[([ x~])\]",
                     lambda m: m.group(1) + ("[x]" if m.group(2) != "x" else "[ ]"),
                     ln)
     if new_ln == ln:
         return HTMLResponse("ok")  # not a checkbox line
-    lines[line] = new_ln
+    # Preserve original line ending
+    eol = lines[line][len(ln):] or "\n"
+    lines[line] = new_ln + eol
     try:
-        write_page(name, "\n".join(lines), snapshot=False)
+        write_page(name, "".join(lines), snapshot=False)
     except OSError:
         return HTMLResponse("write failed", 500)
     return HTMLResponse("ok")
+
+
+from fastapi.responses import JSONResponse
+
+@app.post("/add-todo/{name:path}")
+async def add_todo(name: str, request: Request, _auth: None = Depends(require_auth)):
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"ok": False, "error": "Invalid JSON"}, status_code=400)
+    after_line = body.get("after_line", -1)
+    text = body.get("text", "")
+    if not isinstance(after_line, int) or not isinstance(text, str):
+        return JSONResponse({"ok": False, "error": "Bad request"}, status_code=400)
+    text = text.replace("\r", " ").replace("\n", " ").strip()
+    if not text:
+        return JSONResponse({"ok": False, "error": "Empty text"}, status_code=400)
+    if after_line < 0:
+        return JSONResponse({"ok": False, "error": "Invalid line"}, status_code=400)
+    try:
+        src = read_page(name)
+    except ValueError:
+        return JSONResponse({"ok": False, "error": "Invalid page name"}, status_code=400)
+    if src is None:
+        src = ""
+    lines = src.splitlines(keepends=True)
+    if lines and not lines[-1].endswith("\n"):
+        lines[-1] += "\n"
+    insert_at = max(0, min(after_line + 1, len(lines)))
+    lines.insert(insert_at, f"[ ] {text}\n")
+    try:
+        write_page(name, "".join(lines))
+    except OSError as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+    return JSONResponse({"ok": True, "line": insert_at})
 
 
 @app.get("/new", response_class=HTMLResponse)
@@ -986,6 +1109,14 @@ async def delete_post(name: str, confirm: str = Form(""), _auth: None = Depends(
         p = page_path(name)
         if p.exists():
             p.unlink()
+        # Clean up attic snapshots so deleted pages don't leave orphaned history
+        try:
+            attic_dir = _attic_page_dir(name)
+            if attic_dir.is_dir():
+                import shutil
+                shutil.rmtree(attic_dir)
+        except Exception:
+            pass  # don't block the delete on attic cleanup failure
     except ValueError:
         return HTMLResponse("Invalid page name", 400)
     return RedirectResponse("/wiki/Home", status_code=303)
