@@ -1,8 +1,8 @@
-import os, re, html, time, secrets, json, math
+import os, re, html, time, secrets, json, math, shutil
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from fastapi import Depends, FastAPI, File, Form, Request, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 import uvicorn
 
 PAGES_DIR = Path(os.environ.get("WIKI_PAGES_DIR", "pages"))
@@ -975,8 +975,6 @@ async def toggle(request: Request, name: str, line: int, _auth: None = Depends(r
     return HTMLResponse("ok")
 
 
-from fastapi.responses import JSONResponse
-
 @app.post("/add-todo/{name:path}")
 async def add_todo(name: str, request: Request, _auth: None = Depends(require_auth)):
     try:
@@ -1113,7 +1111,6 @@ async def delete_post(name: str, confirm: str = Form(""), _auth: None = Depends(
         try:
             attic_dir = _attic_page_dir(name)
             if attic_dir.is_dir():
-                import shutil
                 shutil.rmtree(attic_dir)
         except Exception:
             pass  # don't block the delete on attic cleanup failure
