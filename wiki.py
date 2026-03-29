@@ -464,7 +464,9 @@ def nav_bar(search_q: str = "", username: str = "") -> str:
 def shell(title: str, body: str, search_q: str = "", request: Request | None = None) -> str:
     username = ""
     if AUTH_ENABLED and request is not None:
-        username = _validate_token(_get_token(request)) or ""
+        username = getattr(request.state, "username", None)
+        if username is None:
+            username = _validate_token(_get_token(request)) or ""
     dark = f'<style>{CSS_DARK}</style>' if DARK_MODE else ""
     return (f'<!doctype html><html lang="en"><head><meta charset="utf-8">'
             f'<meta name="viewport" content="width=device-width,initial-scale=1">'
@@ -681,9 +683,12 @@ def _htpasswd_set(username: str, password: str, htfile: Path):
 
 def require_auth(request: Request):
     if not AUTH_ENABLED:
+        request.state.username = ""
         return
     token = _get_token(request)
-    if _validate_token(token):
+    username = _validate_token(token)
+    if username:
+        request.state.username = username
         return
     # Preserve the original URL so we can redirect back after login
     next_url = str(request.url)
@@ -702,6 +707,27 @@ async def _login_redirect_handler(request: Request, exc: _LoginRedirect):
     return RedirectResponse(f"/login?next={quote(path_qs, safe='')}", status_code=303)
 
 # ── routes ─────────────────────────────────────────────────────────────────────
+
+# Minimal 1×1 ICO — BGRA pixel #2c3e50 (matches nav colour)
+_FAVICON = bytes([
+    0,0,1,0,1,0,                    # ICONDIR (reserved, type=1, count=1)
+    1,1,0,0,1,0,32,0,48,0,0,0,     # ICONDIRENTRY (w,h,clrs,res,planes,bpp,size=48)
+    22,0,0,0,                       # ICONDIRENTRY image offset (6+16=22)
+    40,0,0,0,                       # BITMAPINFOHEADER size
+    1,0,0,0,2,0,0,0,                # width=1, height=2 (ICO doubles for XOR+AND)
+    1,0,32,0,                       # planes=1, bpp=32
+    0,0,0,0,0,0,0,0,                # compression=BI_RGB, imageSize=0
+    0,0,0,0,0,0,0,0,                # XPelsPerMeter, YPelsPerMeter
+    0,0,0,0,0,0,0,0,                # clrUsed, clrImportant
+    80,62,44,255,                   # pixel BGRA: #2c3e50 fully opaque
+    0,0,0,0,                        # AND mask row (1px, DWORD-aligned)
+])
+
+@app.get("/favicon.ico")
+def favicon():
+    from fastapi.responses import Response
+    return Response(content=_FAVICON, media_type="image/x-icon",
+                    headers={"Cache-Control": "public, max-age=86400"})
 
 @app.get("/")
 def root(): return RedirectResponse("/wiki/Home")
@@ -1524,8 +1550,15 @@ CONFIGURATION
         if not Path(TLS_KEY_FILE).exists():
             raise SystemExit(f"HTTPS_ENABLED=True but key file not found: {TLS_KEY_FILE}")
 
-    kwargs: dict = {"host": HOST, "port": PORT, "reload": False, "timeout_keep_alive": 0}
+    kwargs: dict = {"host": HOST, "port": PORT, "reload": False,
+                    "timeout_keep_alive": 5, "timeout_graceful_shutdown": 3}
     if HTTPS_ENABLED:
         kwargs["ssl_certfile"] = TLS_CERT_FILE
         kwargs["ssl_keyfile"]  = TLS_KEY_FILE
+    # On Windows, the default ProactorEventLoop raises ConnectionResetError during
+    # normal keep-alive connection teardown (WinError 10054), which also stalls
+    # responses. Switching to SelectorEventLoop avoids the bug entirely.
+    import asyncio
+    if sys.platform == "win32":
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
     uvicorn.run(app, **kwargs)
