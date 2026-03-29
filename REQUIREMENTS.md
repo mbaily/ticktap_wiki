@@ -504,3 +504,114 @@ The cert always includes `localhost` and `127.0.0.1` as additional SANs. After g
 2. ~~**Checkbox persistence**: toggle in-place inside the `.wiki` file (mutates source) or sidecar `.state` file?~~ **Resolved: mutates the source file directly.** The toggle endpoint rewrites the `.wiki` file with the checkbox state changed on the relevant line; `data-line` in the HTML tracks the exact line number (adjusted for META header offset).
 3. ~~**highlight.js**: CDN include (zero LOC, requires internet) or omit syntax highlighting to stay fully offline?~~ **Resolved: omitted.** Code blocks emit `<pre><code class="language-{lang}">` with the language class but no highlighter is loaded. The wiki runs fully offline.
 4. **Search**: substring scan is simple but slow at scale — acceptable for a personal wiki?
+
+---
+
+## 18. File Versioning — Exponential Retention
+
+### 18.1 Goals
+
+- Keep an automatic backup of every `.wiki` file on each save, without accumulating unbounded disk usage.
+- Recent edits are kept with fine granularity; older snapshots are thinned out exponentially.
+- No external tools, no database — snapshots are plain files on disk.
+
+### 18.2 Retention Formula
+
+Snapshots are pruned using an **exponential retention schedule** based on $e^x$.
+
+- Let $T = 30$ seconds (the base unit).
+- Number slots from $0$ (newest retained) to $K-1$ (oldest retained), where $K = 10$.
+- A snapshot assigned to slot $i$ is kept only while its age $< e^i \times T$.
+
+| Slot $i$ | Maximum age kept ($e^i \times 30\,\text{s}$) |
+|----------|----------------------------------------------|
+| 0        | always (the current file — never deleted)    |
+| 1        | ~82 s                                        |
+| 2        | ~3 min 42 s                                  |
+| 3        | ~10 min                                      |
+| 4        | ~27 min                                      |
+| 5        | ~1 h 14 min                                  |
+| 6        | ~3 h 22 min                                  |
+| 7        | ~9 h 8 min                                   |
+| 8        | ~24 h 49 min (~1 day)                        |
+| 9        | ~2.8 days                                    |
+| 10       | ~7.6 days (oldest possible snapshot)         |
+
+With 10 backup slots the wiki retains up to ~7.6 days of history per page, with second-level granularity for the most recent changes and progressively coarser granularity further back.
+
+### 18.3 Snapshot Storage
+
+- Snapshots stored in an `attic/` directory at the same level as `pages/`:
+  ```
+  wiki-root/
+    pages/
+    files/
+    attic/
+      Home/
+        20260330_143201.wiki
+        20260330_140000.wiki
+        …
+      projects/alpha/Notes/
+        …
+  ```
+- Namespace directory structure mirrors `pages/`.
+- Snapshot filenames are UTC timestamps: `YYYYMMDD_HHMMSS.wiki`.
+
+### 18.4 Pruning Algorithm
+
+The **live file** in `pages/` is always the current version and is never touched by pruning — it implicitly represents the $[0, T)$ window (ages 0–30 s). The `attic/` directory only ever contains snapshots **older than $T$**.
+
+Snapshots in the attic are organised into **age bands**. Band $i$ ($i \ge 0$) covers:
+
+$$[e^i \times T,\; e^{i+1} \times T)$$
+
+So band 0 covers $[30s, 82s)$, band 1 covers $[82s, 221s)$, and so on up to band $K-1$.
+
+Triggered after every save of a page:
+
+1. Create a new snapshot (UTC timestamp filename) in `attic/` for the just-saved content.
+2. List **all** snapshots for that page and compute each one's age in seconds.
+3. Discard (do not even classify) any snapshots younger than $T = 30s$ — they are redundant with the live file.
+4. Group remaining snapshots into bands: a snapshot with age $a$ belongs to band $i$ where $e^i \times T \le a < e^{i+1} \times T$.
+5. Within each band, **keep only the newest snapshot**; delete all others in that band.
+6. Delete any snapshot whose age is $\ge e^K \times T$ (beyond the last band — default ~7.6 days).
+
+The result is at most one snapshot per band ($K$ snapshots total). Multiple rapid saves that all age into the same band collapse to a single entry.
+
+| Band $i$ | Age range in attic | Represents edits from... |
+|----------|--------------------|--------------------------|
+| 0 | 30 s – 82 s | ~30–82 s ago |
+| 1 | 82 s – 221 s | ~1.5–3.5 min ago |
+| 2 | 221 s – 602 s | ~3.5–10 min ago |
+| 3 | 602 s – 1637 s | ~10–27 min ago |
+| 4 | 1637 s – 4451 s | ~27 min – 1.2 h ago |
+| 5 | 4451 s – 12099 s | ~1.2–3.4 h ago |
+| 6 | 12099 s – 32897 s | ~3.4–9 h ago |
+| 7 | 32897 s – 89422 s | ~9 h – 1 day ago |
+| 8 | 89422 s – 243051 s | ~1–2.8 days ago |
+| 9 | 243051 s – 660686 s | ~2.8–7.6 days ago |
+
+### 18.5 New Endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/history/{name:path}` | List all retained snapshots for a page with timestamps |
+| GET | `/history/{name:path}/{snapshot}` | Render a past snapshot (read-only view) |
+| POST | `/history/{name:path}/{snapshot}/restore` | Restore a snapshot as the current page content |
+
+### 18.6 Configuration
+
+Added to the `# ── config ──` block in `wiki.py`:
+
+```python
+VERSIONING_ENABLED = True          # set False to disable snapshot creation
+ATTIC_DIR          = Path(os.environ.get("WIKI_ATTIC_DIR", "attic"))
+VERSION_BASE_SECS  = 30            # T — base unit for e^i × T retention formula
+VERSION_SLOTS      = 10            # K — number of retention slots
+```
+
+### 18.7 Security
+
+- Snapshot filenames are generated server-side (UTC timestamp); no user input in the path.
+- The resolved attic path must be confirmed to lie within `ATTIC_DIR` before any read or delete (same traversal-check pattern as `page_path`).
+- `GET /history/…` and restore are protected by `require_auth` when `AUTH_ENABLED=True`.

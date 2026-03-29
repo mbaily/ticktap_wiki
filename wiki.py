@@ -1,4 +1,4 @@
-import os, re, html, time, secrets, json
+import os, re, html, time, secrets, json, math
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from fastapi import Depends, FastAPI, File, Form, Request, UploadFile
@@ -26,6 +26,11 @@ TLS_KEY_FILE      = "key.pem"
 
 DARK_MODE         = True         # set True to use dark colour scheme
 
+VERSIONING_ENABLED = True          # set False to disable page history
+ATTIC_DIR          = Path(os.environ.get("WIKI_ATTIC_DIR", "attic"))
+VERSION_BASE_SECS  = 30            # T — base unit for e^i × T retention formula
+VERSION_SLOTS      = 10            # K — number of retention bands
+
 app = FastAPI()
 
 # ── storage helpers ────────────────────────────────────────────────────────────
@@ -44,12 +49,18 @@ def read_page(name: str) -> str | None:
     p = page_path(name)
     return p.read_text(encoding="utf-8") if p.exists() else None
 
-def write_page(name: str, content: str):
+def write_page(name: str, content: str, snapshot: bool = True):
     p = page_path(name)
     p.parent.mkdir(parents=True, exist_ok=True)
     # Normalise line endings: browsers send \r\n; Python text-mode write on
     # Windows would then double-expand \r\n → \r\r\n, blowing up blank lines.
     content = content.replace("\r\n", "\n").replace("\r", "\n")
+    if VERSIONING_ENABLED and snapshot and p.exists():
+        try:
+            _save_snapshot(name, p.read_text(encoding="utf-8"))
+            _prune_attic(name)
+        except Exception:
+            pass  # versioning failure never blocks a save
     tmp = p.with_suffix(".tmp")
     tmp.write_text(content, encoding="utf-8", newline="\n")
     tmp.replace(p)
@@ -69,6 +80,60 @@ def file_path(ns: str, filename: str) -> Path:
     if not target.resolve().is_relative_to(FILES_DIR.resolve()):
         raise ValueError("Path traversal attempt")
     return target
+
+# ── attic / versioning helpers ────────────────────────────────────────────────
+
+def _attic_page_dir(name: str) -> Path:
+    parts = name.strip("/").split("/")
+    for p in parts:
+        if not re.fullmatch(r"[A-Za-z0-9_\-]+", p):
+            raise ValueError(f"Invalid segment: {p!r}")
+    target = ATTIC_DIR.joinpath(*parts)
+    if not target.resolve().is_relative_to(ATTIC_DIR.resolve()):
+        raise ValueError("Path traversal attempt")
+    return target
+
+def _save_snapshot(name: str, content: str):
+    d = _attic_page_dir(name)
+    d.mkdir(parents=True, exist_ok=True)
+    ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    snap = d / f"{ts}.wiki"
+    snap.write_text(content, encoding="utf-8", newline="\n")
+
+def _prune_attic(name: str):
+    d = _attic_page_dir(name)
+    if not d.is_dir():
+        return
+    now = datetime.now(timezone.utc)
+    T, K = VERSION_BASE_SECS, VERSION_SLOTS
+    max_age = math.exp(K) * T
+    entries = []
+    for f in sorted(d.glob("*.wiki")):
+        try:
+            dt = datetime.strptime(f.stem, "%Y%m%d_%H%M%S").replace(tzinfo=timezone.utc)
+        except ValueError:
+            continue
+        age = (now - dt).total_seconds()
+        if age >= max_age:
+            f.unlink(missing_ok=True)
+            continue
+        entries.append((dt, age, f))
+    # Keep all snapshots younger than T (not yet old enough to band)
+    # For the rest, keep only the newest snapshot in each band
+    # Band i covers [e^i * T, e^(i+1) * T); band index = floor(log(age / T))
+    band_newest: dict[int, tuple] = {}
+    for dt, age, f in entries:
+        if age < T:
+            continue
+        band = min(int(math.log(age / T)), K - 1)
+        if band not in band_newest or dt > band_newest[band][0]:
+            band_newest[band] = (dt, age, f)
+    sub_t = [(dt, age, f) for dt, age, f in entries if age < T]
+    sub_t_keep = {max(sub_t, key=lambda x: x[0])[2]} if sub_t else set()
+    keep = {v[2] for v in band_newest.values()} | sub_t_keep
+    for dt, age, f in entries:
+        if f not in keep:
+            f.unlink(missing_ok=True)
 
 def strip_meta(src: str) -> tuple[str, int]:
     """Return (stripped_source, number_of_lines_removed_from_top)."""
@@ -654,6 +719,7 @@ def view(request: Request, name: str, _auth: None = Depends(require_auth)):
     toolbar = (f'<div class="toolbar">{breadcrumb(name)}'
                f'<span style="margin-left:auto;font-size:.8rem;color:#666">Modified: {mtime}</span>'
                f'<a href="/edit/{name}">[edit page]</a>'
+               + (f'<a href="/history/{name}">[history]</a>' if VERSIONING_ENABLED else '') +
                f'<a href="/delete/{name}" style="color:#c0392b">[delete]</a></div>')
     body = f'{toolbar}<div class="layout"><div class="content">{rendered}</div>{toc_html(headings)}</div>'
     return HTMLResponse(shell(name.split("/")[-1], body, request=request))
@@ -774,7 +840,7 @@ async def toggle(request: Request, name: str, line: int, _auth: None = Depends(r
     if new_ln == ln:
         return HTMLResponse("ok")  # not a checkbox line
     lines[line] = new_ln
-    write_page(name, "\n".join(lines))
+    write_page(name, "\n".join(lines), snapshot=False)
     return HTMLResponse("ok")
 
 
@@ -1187,6 +1253,103 @@ def orphans(request: Request, _auth: None = Depends(require_auth)):
     return HTMLResponse(shell("Orphaned Files", body, request=request))
 
 
+# ── history / versioning routes ───────────────────────────────────────────────
+
+_SNAP_RE = re.compile(r"^\d{8}_\d{6}$")
+
+@app.get("/history/{name:path}", response_class=HTMLResponse)
+def history(request: Request, name: str, snap: str = "", _auth: None = Depends(require_auth)):
+    try:
+        d = _attic_page_dir(name)
+    except ValueError:
+        return HTMLResponse("Invalid page name", 400)
+
+    if snap:
+        # View a specific snapshot
+        if not _SNAP_RE.match(snap):
+            return HTMLResponse("Invalid snapshot id", 400)
+        snap_file = d / f"{snap}.wiki"
+        if not snap_file.resolve().is_relative_to(ATTIC_DIR.resolve()):
+            return HTMLResponse("Invalid snapshot id", 400)
+        if not snap_file.exists():
+            return HTMLResponse("Snapshot not found", 404)
+        src = snap_file.read_text(encoding="utf-8")
+        rendered, headings = parse(src, name, section_edit=False)
+        ts_display = f"{snap[:4]}-{snap[4:6]}-{snap[6:8]} {snap[9:11]}:{snap[11:13]}:{snap[13:15]} UTC"
+        body = (f'<div class="layout"><div class="content">{breadcrumb(name)}'
+                f'<div class="toolbar" style="margin-bottom:.5rem">'
+                f'<a href="/history/{html.escape(name)}">&larr; History</a>'
+                f'<span style="color:#888;font-size:.85rem">Snapshot: {html.escape(ts_display)}</span>'
+                f'<form method="post" action="/restore/{html.escape(name)}" style="display:inline">'
+                f'<input type="hidden" name="snap" value="{html.escape(snap)}">'
+                f'<button type="submit">Restore this version</button>'
+                f'</form></div>'
+                f'<div class="notice">This is a historical snapshot \u2014 read-only.</div>'
+                f'{rendered}</div>{toc_html(headings)}</div>')
+        return HTMLResponse(shell(f"Snapshot {ts_display} \u2014 {name}", body, request=request))
+
+    # List snapshots
+    snaps = []
+    if d.is_dir():
+        for f in sorted(d.glob("*.wiki"), reverse=True):
+            if not _SNAP_RE.match(f.stem):
+                continue
+            ts = f.stem
+            ts_display = f"{ts[:4]}-{ts[4:6]}-{ts[6:8]} {ts[9:11]}:{ts[11:13]}:{ts[13:15]} UTC"
+            snaps.append((ts, ts_display))
+    if not snaps:
+        content = '<div class="notice">No history snapshots yet. Snapshots are created on each save once a previous version exists.</div>'
+    else:
+        rows = "".join(
+            f'<tr>'
+            f'<td style="padding:.4rem .6rem">{html.escape(ts_disp)}</td>'
+            f'<td style="padding:.4rem .6rem"><a href="/history/{html.escape(name)}?snap={html.escape(ts)}">View</a></td>'
+            f'<td style="padding:.4rem .6rem">'
+            f'<form method="post" action="/restore/{html.escape(name)}" style="display:inline">'
+            f'<input type="hidden" name="snap" value="{html.escape(ts)}">'
+            f'<button type="submit" style="font-size:.85rem;padding:.2rem .5rem">Restore</button>'
+            f'</form></td></tr>'
+            for ts, ts_disp in snaps
+        )
+        content = (f'<table style="width:100%;border-collapse:collapse;border:1px solid #ddd">'
+                   f'<tr style="background:#ecf0f1">'
+                   f'<th style="padding:.4rem .6rem;text-align:left">Timestamp (UTC)</th>'
+                   f'<th style="padding:.4rem .6rem;text-align:left">View</th>'
+                   f'<th style="padding:.4rem .6rem;text-align:left">Restore</th>'
+                   f'</tr>{rows}</table>')
+    body = (f'<div class="layout"><div class="content">{breadcrumb(name)}'
+            f'<div class="toolbar" style="margin-bottom:.5rem">'
+            f'<a href="/wiki/{html.escape(name)}">&larr; Back to page</a></div>'
+            f'<h1>&#128337; History: {html.escape(name.split("/")[-1])}</h1>'
+            f'<p style="font-size:.85rem;color:#888;margin:.4rem 0">'
+            f'{len(snaps)} snapshot{"s" if len(snaps) != 1 else ""} retained</p>'
+            f'{content}</div></div>')
+    return HTMLResponse(shell(f"History \u2014 {name}", body, request=request))
+
+
+@app.post("/restore/{name:path}", response_class=HTMLResponse)
+async def restore_snapshot(name: str, snap: str = Form(""), _auth: None = Depends(require_auth)):
+    if not VERSIONING_ENABLED:
+        return HTMLResponse("Versioning is disabled", 400)
+    if not _SNAP_RE.match(snap):
+        return HTMLResponse("Invalid snapshot id", 400)
+    try:
+        d = _attic_page_dir(name)
+    except ValueError:
+        return HTMLResponse("Invalid page name", 400)
+    snap_file = d / f"{snap}.wiki"
+    if not snap_file.resolve().is_relative_to(ATTIC_DIR.resolve()):
+        return HTMLResponse("Invalid snapshot id", 400)
+    if not snap_file.exists():
+        return HTMLResponse("Snapshot not found", 404)
+    content = snap_file.read_text(encoding="utf-8")
+    try:
+        write_page(name, content)
+    except (ValueError, OSError) as e:
+        return HTMLResponse(f"Restore failed: {html.escape(str(e))}", 500)
+    return RedirectResponse(f"/wiki/{name}", status_code=303)
+
+
 # ── startup ────────────────────────────────────────────────────────────────────
 
 WELCOME = """\
@@ -1218,6 +1381,8 @@ This is your personal wiki. Edit this page to get started.
 
 PAGES_DIR.mkdir(parents=True, exist_ok=True)
 FILES_DIR.mkdir(parents=True, exist_ok=True)
+if VERSIONING_ENABLED:
+    ATTIC_DIR.mkdir(parents=True, exist_ok=True)
 home = PAGES_DIR / "Home.wiki"
 if not home.exists():
     home.write_text(WELCOME, encoding="utf-8", newline="\n")
