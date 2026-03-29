@@ -69,6 +69,8 @@ def parse_inline(text: str, cur_ns: str = "") -> str:
         inner = raw[2:-2]  # strip [[ and ]]
         parts = inner.split("|", 1)
         target, label = parts[0].strip(), (html.escape(parts[1].strip()) if len(parts) > 1 else None)
+        if not target:
+            return html.escape(raw)  # [[]] or [[ ]] — render as plain text
         if target.startswith(("http://", "https://")):
             return f'<a href="{html.escape(target)}" target="_blank" rel="noopener">{label or html.escape(target)}</a>'
         if target.startswith(":"):
@@ -182,8 +184,19 @@ def parse(src: str, name: str = "", section_edit: bool = True) -> tuple[str, lis
 
 
 def split_sections(src: str) -> list[str]:
-    """Split on ===== (h2) headings, keeping the heading with its content."""
-    return re.split(r"(?m)(?=^===== )", src)
+    """Split on ===== (h2) headings, keeping the heading with its content.
+    Lines inside fenced code blocks are never treated as section boundaries."""
+    parts = []
+    last = 0
+    in_code = False
+    for m in re.finditer(r"(?m)^(```|===== )", src):
+        if m.group(1) == "```":
+            in_code = not in_code
+        elif not in_code and m.start() != last:
+            parts.append(src[last:m.start()])
+            last = m.start()
+    parts.append(src[last:])
+    return parts if parts else [src]
 
 # ── CSS / JS ───────────────────────────────────────────────────────────────────
 
