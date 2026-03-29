@@ -559,7 +559,7 @@ def _htpasswd_set(username: str, password: str, htfile: Path):
                     continue  # overwrite below
             lines.append(line)
     lines.append(f"{username}:{hashed}")
-    tmp = htfile.with_suffix(".tmp")
+    tmp = htfile.parent / (htfile.name + ".tmp")
     tmp.write_text("\n".join(lines) + "\n", encoding="utf-8")
     tmp.replace(htfile)
 
@@ -900,7 +900,7 @@ _FILE_MIME = {
     "csv": "text/csv",   "zip": "application/zip",
 }
 
-def _upload_page(ns: str, results: list | None) -> HTMLResponse:
+def _upload_page(ns: str, results: list | None, request: Request | None = None) -> HTMLResponse:
     ns_display = ns.replace("/", ":") if ns else "(root)"
     action = f"/upload/{ns}" if ns else "/upload"
     res_html = ""
@@ -966,7 +966,7 @@ def _upload_page(ns: str, results: list | None) -> HTMLResponse:
     )
     return HTMLResponse(shell(f"Upload — {html.escape(ns_display)}", body))
 
-async def _do_upload(ns: str, files: list[UploadFile]) -> HTMLResponse:
+async def _do_upload(ns: str, files: list[UploadFile], request: Request | None = None) -> HTMLResponse:
     if ns:
         for seg in ns.strip("/").split("/"):
             if not re.fullmatch(r"[A-Za-z0-9_\-]+", seg):
@@ -1004,22 +1004,22 @@ async def _do_upload(ns: str, files: list[UploadFile]) -> HTMLResponse:
         markup = markup_embed if is_img else markup_link
         results.append({"name": f.filename, "ok": True, "markup": markup,
                         "markup_embed": markup_embed, "markup_link": markup_link, "is_img": is_img})
-    return _upload_page(ns, results)
+    return _upload_page(ns, results, request)
 
 
 @app.get("/upload", response_class=HTMLResponse)
-def upload_get_root(request: Request, _auth: None = Depends(require_auth)): return _upload_page("", None)
+def upload_get_root(request: Request, _auth: None = Depends(require_auth)): return _upload_page("", None, request)
 
 @app.get("/upload/{ns:path}", response_class=HTMLResponse)
-def upload_get(request: Request, ns: str, _auth: None = Depends(require_auth)): return _upload_page(ns, None)
+def upload_get(request: Request, ns: str, _auth: None = Depends(require_auth)): return _upload_page(ns, None, request)
 
 @app.post("/upload", response_class=HTMLResponse)
-async def upload_post_root(files: list[UploadFile] = File(default=[]), _auth: None = Depends(require_auth)):
-    return await _do_upload("", files)
+async def upload_post_root(request: Request, files: list[UploadFile] = File(default=[]), _auth: None = Depends(require_auth)):
+    return await _do_upload("", files, request)
 
 @app.post("/upload/{ns:path}", response_class=HTMLResponse)
-async def upload_post(ns: str, files: list[UploadFile] = File(default=[]), _auth: None = Depends(require_auth)):
-    return await _do_upload(ns, files)
+async def upload_post(request: Request, ns: str, files: list[UploadFile] = File(default=[]), _auth: None = Depends(require_auth)):
+    return await _do_upload(ns, files, request)
 
 
 @app.get("/files/{filepath:path}")
@@ -1237,11 +1237,16 @@ CONFIGURATION
         print(f"Generating 2048-bit RSA key and self-signed cert ({args.days} days, CN={args.cn!r})...")
         key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
         name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, args.cn)])
-        san = x509.SubjectAlternativeName([
-            x509.DNSName(args.cn),
-            x509.DNSName("localhost"),
-            x509.IPAddress(ipaddress.IPv4Address("127.0.0.1")),
-        ])
+        # If --cn looks like an IP address, add it as IPAddress SAN; otherwise DNSName
+        try:
+            cn_ip = ipaddress.ip_address(args.cn)
+            cn_san = x509.IPAddress(cn_ip)
+        except ValueError:
+            cn_san = x509.DNSName(args.cn)
+        san_entries = [cn_san]
+        if args.cn not in ("localhost", "127.0.0.1"):
+            san_entries += [x509.DNSName("localhost"), x509.IPAddress(ipaddress.IPv4Address("127.0.0.1"))]
+        san = x509.SubjectAlternativeName(san_entries)
         now = datetime.now(_tz.utc)
         cert = (
             x509.CertificateBuilder()
