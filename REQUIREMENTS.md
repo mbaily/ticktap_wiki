@@ -155,7 +155,11 @@ The default view for every page. Raw markup is never shown here.
 - Renders the full page as HTML with all markup interpreted.
 - **Navigation bar** (top): wiki name/logo, search box, **[new page]** button.
 - **Page toolbar** (below nav): page name, last-modified timestamp, **[edit page]** button.
-- **Table of Contents**: auto-generated from all headings; collapsible; shown above page body.
+- **Table of Contents sidebar** (right side): auto-generated from all headings on the page; floated to the right of the page body.
+  - Each entry is an `<a href="#anchor">` jump link to the corresponding heading.
+  - Entries are indented to reflect heading level (h1 → h2 → h3).
+  - Collapsible (toggle button at the top of the sidebar).
+  - Stays visible while scrolling (CSS `position: sticky`).
 - Each `==` section heading has an inline **[edit]** button on the right.
 - Todo checkboxes are rendered as clickable `<input type="checkbox">`; toggling one persists the change immediately via a background POST (no page reload).
 - Internal links to non-existent pages are styled distinctly (e.g. dashed underline) and navigate to the editor for that page.
