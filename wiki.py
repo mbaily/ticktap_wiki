@@ -1,6 +1,7 @@
-import os, re, html, time, secrets
+import os, re, html, time, secrets, json
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from fastapi import FastAPI, File, Form, Request, UploadFile
+from fastapi import Depends, FastAPI, File, Form, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 import uvicorn
 
@@ -12,6 +13,17 @@ ALLOWED_EXTS   = {"jpg","jpeg","png","gif","webp","svg","pdf","txt","md","csv","
 IMAGE_EXTS     = {"jpg","jpeg","png","gif","webp","svg"}
 MAX_FILE_SIZE  = 20 * 1024 * 1024   # 20 MB per file
 MAX_TOTAL_SIZE = 100 * 1024 * 1024  # 100 MB per request
+
+# ── config ──────────────────────────────────────────────────────────────────────
+AUTH_ENABLED      = True          # set True to require login
+HTPASSWD_FILE     = Path(".htpasswd")
+TOKEN_EXPIRY_DAYS = 30             # how long a login token stays valid
+TOKEN_FILE        = Path(__file__).parent / ".wiki_tokens"
+
+HTTPS_ENABLED     = True          # set True to enable TLS
+TLS_CERT_FILE     = "cert.pem"
+TLS_KEY_FILE      = "key.pem"
+
 app = FastAPI()
 
 # ── storage helpers ────────────────────────────────────────────────────────────
@@ -303,6 +315,11 @@ input[type=checkbox]{cursor:pointer;width:1.1em;height:1.1em;vertical-align:midd
 .sitemap ul{list-style:none;padding-left:1.2rem}.sitemap>ul{padding-left:0}
 .broken-file{color:#c0392b;font-style:italic}
 .content img{max-width:100%;height:auto}
+.login-box{max-width:360px;margin:3rem auto;background:#fff;border:1px solid #ddd;border-radius:6px;padding:2rem}
+.login-box h1{font-size:1.3rem;margin-bottom:1rem}
+.login-box input[type=text],.login-box input[type=password]{width:100%;padding:.4rem .6rem;margin:.3rem 0 .8rem;border:1px solid #ccc;border-radius:4px;font-size:1rem}
+.login-box button{width:100%;padding:.5rem;font-size:1rem;background:#2c3e50;color:#fff;border:none;border-radius:4px;cursor:pointer}
+.login-error{background:#fde;border:1px solid #c0392b;padding:.5rem .8rem;border-radius:4px;margin-bottom:.8rem;font-size:.9rem}
 """
 
 JS = """
@@ -320,20 +337,26 @@ document.querySelectorAll('textarea').forEach(ta=>{
 
 # ── HTML helpers ───────────────────────────────────────────────────────────────
 
-def nav_bar(search_q: str = "") -> str:
+def nav_bar(search_q: str = "", username: str = "") -> str:
     q = html.escape(search_q)
+    logout = (f' <a href="/logout" style="margin-left:auto;font-size:.85rem;color:#ecf0f1">'
+              f'&#128274; logout ({html.escape(username)})</a>') if username else ""
     return (f'<nav><a href="/wiki/Home"><strong>&#128366; Wiki</strong></a>'
             f'<a href="/sitemap">Site Map</a><a href="/new">+ New Page</a>'
             f'<a href="/orphans">&#128204; Orphaned Files</a>'
-            f'<form method="get" action="/search">'
+            f'{logout}'
+            f'<form method="get" action="/search" {"" if username else "style=\"margin-left:auto\""}>' 
             f'<input type="search" name="q" placeholder="Search…" value="{q}"></form></nav>')
 
-def shell(title: str, body: str, search_q: str = "") -> str:
+def shell(title: str, body: str, search_q: str = "", request: Request | None = None) -> str:
+    username = ""
+    if AUTH_ENABLED and request is not None:
+        username = _validate_token(_get_token(request)) or ""
     return (f'<!doctype html><html lang="en"><head><meta charset="utf-8">'
             f'<meta name="viewport" content="width=device-width,initial-scale=1">'
             f'<title>{html.escape(title)} — Wiki</title>'
             f'<style>{CSS}</style></head><body>'
-            f'{nav_bar(search_q)}{body}'
+            f'{nav_bar(search_q, username)}{body}'
             f'<script>{JS}</script></body></html>')
 
 def breadcrumb(name: str) -> str:
@@ -415,6 +438,145 @@ def files_section(ns: str) -> str:
     return (f'<details style="margin-top:1rem" open>'
             f'<summary style="cursor:pointer;font-weight:bold">&#128206; Attached files ({len(items)}) {attach_link}</summary>'
             f'<ul style="list-style:none;padding:.4rem 0 0 0">{"" .join(items)}</ul></details>')
+# ── auth helpers ──────────────────────────────────────────────────────────────
+
+# ---- token store ----
+
+def _now() -> datetime:
+    return datetime.now(timezone.utc)
+
+def _load_tokens() -> dict:
+    if TOKEN_FILE.exists():
+        try:
+            return json.loads(TOKEN_FILE.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    return {}
+
+def _save_tokens(tokens: dict):
+    tmp = TOKEN_FILE.with_suffix(".tmp")
+    tmp.write_text(json.dumps(tokens, indent=2), encoding="utf-8")
+    tmp.replace(TOKEN_FILE)
+
+def _issue_token(username: str) -> str:
+    token = secrets.token_hex(32)
+    tokens = _load_tokens()
+    # prune expired
+    now = _now()
+    tokens = {k: v for k, v in tokens.items()
+              if datetime.fromisoformat(v["expires"]) > now}
+    tokens[token] = {
+        "user": username,
+        "issued": now.isoformat(),
+        "expires": (now + timedelta(days=TOKEN_EXPIRY_DAYS)).isoformat(),
+    }
+    _save_tokens(tokens)
+    return token
+
+def _validate_token(token: str) -> str | None:
+    """Return username if token is valid, else None."""
+    if not token:
+        return None
+    tokens = _load_tokens()
+    entry = tokens.get(token)
+    if not entry:
+        return None
+    if datetime.fromisoformat(entry["expires"]) <= _now():
+        return None
+    return entry["user"]
+
+def _revoke_token(token: str):
+    tokens = _load_tokens()
+    tokens.pop(token, None)
+    _save_tokens(tokens)
+
+def _get_token(request: Request) -> str:
+    """Extract token from cookie, then query param, then Authorization header."""
+    t = request.cookies.get("wiki_token", "")
+    if not t:
+        t = request.query_params.get("wiki_token", "")
+    if not t:
+        auth = request.headers.get("authorization", "")
+        if auth.lower().startswith("bearer "):
+            t = auth[7:].strip()
+    return t
+
+# ---- rate limiter ----
+
+_fail_log: dict[str, list[float]] = {}  # ip -> [timestamp, ...]
+_FAIL_WINDOW = 60      # seconds
+_FAIL_MAX    = 5       # attempts before lockout
+
+def _check_rate(ip: str) -> bool:
+    """Return True if the IP is allowed to attempt login, False if locked out."""
+    now = time.monotonic()
+    hits = [t for t in _fail_log.get(ip, []) if now - t < _FAIL_WINDOW]
+    _fail_log[ip] = hits
+    return len(hits) < _FAIL_MAX
+
+def _record_fail(ip: str):
+    now = time.monotonic()
+    _fail_log.setdefault(ip, []).append(now)
+
+# ---- htpasswd checker ----
+
+def _check_password(username: str, password: str) -> bool:
+    """Verify username/password against HTPASSWD_FILE. Supports bcrypt hashes only."""
+    try:
+        import bcrypt as _bcrypt  # type: ignore
+        for line in HTPASSWD_FILE.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or ":" not in line:
+                continue
+            u, h = line.split(":", 1)
+            if u != username:
+                continue
+            hb = h.encode()
+            # Apache uses $2y$; Python bcrypt uses $2b$ — identical algorithm
+            if hb.startswith(b"$2y$"):
+                hb = b"$2b$" + hb[4:]
+            return _bcrypt.checkpw(password.encode(), hb)
+    except Exception:
+        pass
+    return False
+
+def _htpasswd_set(username: str, password: str, htfile: Path):
+    """Add or update a user entry in an htpasswd file using bcrypt."""
+    import bcrypt as _bcrypt  # type: ignore
+    hashed = _bcrypt.hashpw(password.encode(), _bcrypt.gensalt(rounds=12)).decode()
+    lines: list[str] = []
+    if htfile.exists():
+        for line in htfile.read_text(encoding="utf-8").splitlines():
+            if line.strip() and not line.startswith("#") and ":" in line:
+                if line.split(":", 1)[0] == username:
+                    continue  # overwrite below
+            lines.append(line)
+    lines.append(f"{username}:{hashed}")
+    tmp = htfile.with_suffix(".tmp")
+    tmp.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    tmp.replace(htfile)
+
+# ---- FastAPI dependency ----
+
+def require_auth(request: Request):
+    if not AUTH_ENABLED:
+        return
+    token = _get_token(request)
+    if _validate_token(token):
+        return
+    # Preserve the original URL so we can redirect back after login
+    next_url = str(request.url)
+    raise _LoginRedirect(next_url)
+
+class _LoginRedirect(Exception):
+    def __init__(self, next_url: str):
+        self.next_url = next_url
+
+@app.exception_handler(_LoginRedirect)
+async def _login_redirect_handler(request: Request, exc: _LoginRedirect):
+    from urllib.parse import quote
+    return RedirectResponse(f"/login?next={quote(exc.next_url, safe='')}", status_code=303)
+
 # ── routes ─────────────────────────────────────────────────────────────────────
 
 @app.get("/")
@@ -422,7 +584,7 @@ def root(): return RedirectResponse("/wiki/Home")
 
 
 @app.get("/wiki/{name:path}", response_class=HTMLResponse)
-def view(name: str):
+def view(request: Request, name: str, _auth: None = Depends(require_auth)):
     try:
         src = read_page(name)
     except ValueError:
@@ -431,7 +593,7 @@ def view(name: str):
         body = (f'<div class="layout"><div class="content">{breadcrumb(name)}'
                 f'<div class="notice">This page does not exist &mdash; '
                 f'<a href="/edit/{name}">create it?</a></div></div></div>')
-        return HTMLResponse(shell(name, body), 200)
+        return HTMLResponse(shell(name, body, request=request), 200)
     rendered, headings = parse(src, name)
     try:
         mtime = time.strftime("%Y-%m-%d %H:%M", time.localtime(page_path(name).stat().st_mtime))
@@ -442,11 +604,11 @@ def view(name: str):
                f'<a href="/edit/{name}">[edit page]</a>'
                f'<a href="/delete/{name}" style="color:#c0392b">[delete]</a></div>')
     body = f'{toolbar}<div class="layout"><div class="content">{rendered}</div>{toc_html(headings)}</div>'
-    return HTMLResponse(shell(name.split("/")[-1], body))
+    return HTMLResponse(shell(name.split("/")[-1], body, request=request))
 
 
 @app.get("/sect/{name:path}/{idx}", response_class=HTMLResponse)
-def edit_section_get(name: str, idx: int):
+def edit_section_get(request: Request, name: str, idx: int, _auth: None = Depends(require_auth)):
     if idx < 0:
         return HTMLResponse("Section not found", 400)
     try:
@@ -465,11 +627,11 @@ def edit_section_get(name: str, idx: int):
             f'<a href="/wiki/{name}">Cancel</a></div>'
             f'<textarea name="content" rows="20">{content}</textarea>'
             f'</form></div></div>')
-    return HTMLResponse(shell(f"Edit section \u2014 {name}", body))
+    return HTMLResponse(shell(f"Edit section \u2014 {name}", body, request=request))
 
 
 @app.post("/sect/{name:path}/{idx}", response_class=HTMLResponse)
-async def edit_section_post(name: str, idx: int, content: str = Form("")):
+async def edit_section_post(name: str, idx: int, content: str = Form(""), _auth: None = Depends(require_auth)):
     if idx < 0:
         return HTMLResponse("Section not found", 400)
     try:
@@ -488,7 +650,7 @@ async def edit_section_post(name: str, idx: int, content: str = Form("")):
 
 
 @app.get("/edit/{name:path}", response_class=HTMLResponse)
-def edit_get(name: str):
+def edit_get(request: Request, name: str, _auth: None = Depends(require_auth)):
     try:
         src = read_page(name)
     except ValueError:
@@ -519,11 +681,11 @@ def edit_get(name: str):
             f'  d.innerHTML=await r.text();d.style.display="block";'
             f'}}'
             f'</script>')
-    return HTMLResponse(shell(f"Edit — {name}", body))
+    return HTMLResponse(shell(f"Edit — {name}", body, request=request))
 
 
 @app.post("/edit/{name:path}", response_class=HTMLResponse)
-async def edit_post(name: str, content: str = Form("")):
+async def edit_post(name: str, content: str = Form(""), _auth: None = Depends(require_auth)):
     try:
         write_page(name, content)
     except ValueError:
@@ -534,13 +696,13 @@ async def edit_post(name: str, content: str = Form("")):
 
 
 @app.post("/preview", response_class=HTMLResponse)
-async def preview(name: str = Form(""), content: str = Form("")):
+async def preview(name: str = Form(""), content: str = Form(""), _auth: None = Depends(require_auth)):
     rendered, _ = parse(content, name, section_edit=False)
     return HTMLResponse(rendered)
 
 
 @app.post("/toggle/{name:path}/{line}", response_class=HTMLResponse)
-async def toggle(name: str, line: int):
+async def toggle(request: Request, name: str, line: int, _auth: None = Depends(require_auth)):
     if line < 0:
         return HTMLResponse("Out of range", 400)
     try:
@@ -565,7 +727,7 @@ async def toggle(name: str, line: int):
 
 
 @app.get("/new", response_class=HTMLResponse)
-def new_page():
+def new_page(request: Request, _auth: None = Depends(require_auth)):
     body = ('<div class="layout"><div class="content"><h1>New Page</h1>'
             '<p>Use <code>:</code> for namespaces, e.g. <code>projects:MyPage</code></p>'
             '<form id="nf" onsubmit="event.preventDefault();location.href=\'/edit/\'+document.getElementById(\'ni\').value.replace(/:/g,\'/'+'\')">'
@@ -573,11 +735,11 @@ def new_page():
             ' placeholder="PageName or ns:PageName" pattern="[A-Za-z0-9_\\-:]+" required><br>'
             '<button type="submit">Create</button>'
             '</form></div></div>')
-    return HTMLResponse(shell("New Page", body))
+    return HTMLResponse(shell("New Page", body, request=request))
 
 
 @app.get("/ns/{ns:path}", response_class=HTMLResponse)
-def ns_view(ns: str):
+def ns_view(request: Request, ns: str, _auth: None = Depends(require_auth)):
     for p in ns.strip("/").split("/"):
         if not re.fullmatch(r"[A-Za-z0-9_\-]+", p):
             return HTMLResponse("Invalid namespace", 400)
@@ -590,11 +752,11 @@ def ns_view(ns: str):
             f'{dir_listing(ns_dir, ns_clean)}'
             f'{files_section(ns_clean)}'
             f'</div></div>')
-    return HTMLResponse(shell(f"ns:{ns}", body))
+    return HTMLResponse(shell(f"ns:{ns}", body, request=request))
 
 
 @app.get("/sitemap", response_class=HTMLResponse)
-def sitemap():
+def sitemap(request: Request, _auth: None = Depends(require_auth)):
     def tree(d: Path, prefix: str) -> str:
         s = "<ul>"
         for child in sorted(d.iterdir()):
@@ -610,11 +772,11 @@ def sitemap():
                 s += f'<li>&#128196; <a href="/wiki/{pname}">{html.escape(child.stem)}</a> <small style="color:#888">{mtime}</small></li>'
         return s + "</ul>"
     body = f'<div class="layout"><div class="content sitemap"><h1>Site Map</h1>{tree(PAGES_DIR, "")}</div></div>'
-    return HTMLResponse(shell("Site Map", body))
+    return HTMLResponse(shell("Site Map", body, request=request))
 
 
 @app.get("/search", response_class=HTMLResponse)
-def search(q: str = ""):
+def search(request: Request, q: str = "", _auth: None = Depends(require_auth)):
     if not q:
         return RedirectResponse("/")
     results = []
@@ -635,11 +797,11 @@ def search(q: str = ""):
             f'<p>{len(results)} result{"s" if len(results) != 1 else ""}</p>'
             f'{"".join(results) or "<p>No results found.</p>"}'
             f'</div></div>')
-    return HTMLResponse(shell(f"Search: {q}", body, search_q=q))
+    return HTMLResponse(shell(f"Search: {q}", body, search_q=q, request=request))
 
 
 @app.get("/delete/{name:path}", response_class=HTMLResponse)
-def delete_get(name: str):
+def delete_get(request: Request, name: str, _auth: None = Depends(require_auth)):
     try:
         page_path(name)  # validate name; raises ValueError on bad input
     except ValueError:
@@ -652,11 +814,11 @@ def delete_get(name: str):
             f'<button type="submit" style="background:#c0392b;color:#fff;border-color:#a93226">Yes, delete</button>'
             f'&nbsp;<a href="/wiki/{html.escape(name)}">Cancel</a>'
             f'</form></div></div>')
-    return HTMLResponse(shell(f"Delete — {name}", body))
+    return HTMLResponse(shell(f"Delete — {name}", body, request=request))
 
 
 @app.post("/delete/{name:path}", response_class=HTMLResponse)
-async def delete_post(name: str, confirm: str = Form("")):
+async def delete_post(name: str, confirm: str = Form(""), _auth: None = Depends(require_auth)):
     if confirm != "yes":
         return RedirectResponse(f"/wiki/{name}", status_code=303)
     try:
@@ -666,6 +828,57 @@ async def delete_post(name: str, confirm: str = Form("")):
     except ValueError:
         return HTMLResponse("Invalid page name", 400)
     return RedirectResponse("/wiki/Home", status_code=303)
+
+
+# ── login / logout ─────────────────────────────────────────────────────────────
+
+def _login_page(next_url: str, error: str = "") -> HTMLResponse:
+    err_html = f'<div class="login-error">{html.escape(error)}</div>' if error else ""
+    next_safe = html.escape(next_url)
+    body = (f'<div class="login-box">'
+            f'<h1>&#128274; Wiki Login</h1>'
+            f'{err_html}'
+            f'<form method="post" action="/login">'
+            f'<input type="hidden" name="next" value="{next_safe}">'
+            f'<label>Username<input type="text" name="username" autocomplete="username" required></label>'
+            f'<label>Password<input type="password" name="password" autocomplete="current-password" required></label>'
+            f'<button type="submit">Log in</button>'
+            f'</form></div>')
+    return HTMLResponse(f'<!doctype html><html lang="en"><head><meta charset="utf-8">'
+                        f'<meta name="viewport" content="width=device-width,initial-scale=1">'
+                        f'<title>Login \u2014 Wiki</title><style>{CSS}</style></head>'
+                        f'<body>{body}</body></html>')
+
+@app.get("/login", response_class=HTMLResponse)
+def login_get(next: str = "/wiki/Home"):
+    return _login_page(next)
+
+@app.post("/login", response_class=HTMLResponse)
+async def login_post(request: Request, username: str = Form(""), password: str = Form(""), next: str = Form("/wiki/Home")):
+    ip = request.client.host if request.client else "unknown"
+    if not _check_rate(ip):
+        return HTMLResponse("Too many login attempts. Wait 60 seconds.", status_code=429)
+    if not username or not password:
+        _record_fail(ip)
+        return _login_page(next, "Invalid credentials")
+    if not _check_password(username, password):
+        _record_fail(ip)
+        return _login_page(next, "Invalid credentials")
+    token = _issue_token(username)
+    safe_next = next if next.startswith("/") and not next.startswith("//") else "/wiki/Home"
+    resp = RedirectResponse(safe_next, status_code=303)
+    resp.set_cookie("wiki_token", token, max_age=TOKEN_EXPIRY_DAYS * 86400,
+                    httponly=True, samesite="strict", secure=HTTPS_ENABLED, path="/")
+    return resp
+
+@app.get("/logout")
+async def logout(request: Request):
+    token = _get_token(request)
+    if token:
+        _revoke_token(token)
+    resp = RedirectResponse("/login", status_code=303)
+    resp.delete_cookie("wiki_token", path="/")
+    return resp
 
 
 # ── file upload helpers ────────────────────────────────────────────────────────
@@ -785,22 +998,22 @@ async def _do_upload(ns: str, files: list[UploadFile]) -> HTMLResponse:
 
 
 @app.get("/upload", response_class=HTMLResponse)
-def upload_get_root(): return _upload_page("", None)
+def upload_get_root(request: Request, _auth: None = Depends(require_auth)): return _upload_page("", None)
 
 @app.get("/upload/{ns:path}", response_class=HTMLResponse)
-def upload_get(ns: str): return _upload_page(ns, None)
+def upload_get(request: Request, ns: str, _auth: None = Depends(require_auth)): return _upload_page(ns, None)
 
 @app.post("/upload", response_class=HTMLResponse)
-async def upload_post_root(files: list[UploadFile] = File(default=[])):
+async def upload_post_root(files: list[UploadFile] = File(default=[]), _auth: None = Depends(require_auth)):
     return await _do_upload("", files)
 
 @app.post("/upload/{ns:path}", response_class=HTMLResponse)
-async def upload_post(ns: str, files: list[UploadFile] = File(default=[])):
+async def upload_post(ns: str, files: list[UploadFile] = File(default=[]), _auth: None = Depends(require_auth)):
     return await _do_upload(ns, files)
 
 
 @app.get("/files/{filepath:path}")
-def serve_file(filepath: str):
+def serve_file(filepath: str, _auth: None = Depends(require_auth)):
     filepath = filepath.strip("/")
     if not filepath:
         return HTMLResponse("Not found", 404)
@@ -824,7 +1037,7 @@ def serve_file(filepath: str):
 
 
 @app.post("/file-delete/{filepath:path}", response_class=HTMLResponse)
-async def file_delete(request: Request, filepath: str):
+async def file_delete(request: Request, filepath: str, _auth: None = Depends(require_auth)):
     filepath = filepath.strip("/")
     if "/" in filepath:
         f_ns, filename = filepath.rsplit("/", 1)
@@ -847,7 +1060,7 @@ async def file_delete(request: Request, filepath: str):
 
 
 @app.get("/orphans", response_class=HTMLResponse)
-def orphans():
+def orphans(request: Request, _auth: None = Depends(require_auth)):
     # Collect every file stored under FILES_DIR
     all_files: set[str] = set()
     if FILES_DIR.is_dir():
@@ -880,7 +1093,7 @@ def orphans():
                 '<h1>&#128204; Orphaned Files</h1>'
                 '<p>No orphaned files — every file has at least one wiki link.</p>'
                 '</div></div>')
-        return HTMLResponse(shell("Orphaned Files", body))
+        return HTMLResponse(shell("Orphaned Files", body, request=request))
 
     rows = ""
     for rel in orphaned:
@@ -918,7 +1131,7 @@ def orphans():
             f'<th style="padding:.4rem .6rem"></th>'
             f'</tr>{rows}</table>'
             f'</div></div>')
-    return HTMLResponse(shell("Orphaned Files", body))
+    return HTMLResponse(shell("Orphaned Files", body, request=request))
 
 
 # ── startup ────────────────────────────────────────────────────────────────────
@@ -957,4 +1170,124 @@ if not home.exists():
     home.write_text(WELCOME, encoding="utf-8", newline="\n")
 
 if __name__ == "__main__":
-    uvicorn.run(app, host=HOST, port=PORT, reload=False)
+    import sys, getpass, argparse
+    ap = argparse.ArgumentParser(
+        description="wiki.py — personal wiki server",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""\
+MODES
+  Start the server (default):
+    python wiki.py
+
+  Add or update a user in the htpasswd file, then exit:
+    python wiki.py --adduser alice
+    python wiki.py --adduser alice --htpasswd /path/to/.htpasswd
+
+  Generate a self-signed TLS certificate + key, then exit:
+    python wiki.py --gencert
+    python wiki.py --gencert --cert server.pem --key server.key --days 3650 --host mywiki.local
+
+CONFIGURATION
+  Edit the '# ── config ──' block near the top of wiki.py to change:
+    AUTH_ENABLED      enable login (requires .htpasswd)
+    HTPASSWD_FILE     path to htpasswd file (default: .htpasswd)
+    TOKEN_EXPIRY_DAYS login token lifetime in days (default: 30)
+    HTTPS_ENABLED     enable TLS
+    TLS_CERT_FILE     path to TLS certificate (default: cert.pem)
+    TLS_KEY_FILE      path to TLS private key  (default: key.pem)
+    HOST / PORT       listening address (default: 127.0.0.1:8080)
+"""
+    )
+    ap.add_argument("--adduser", metavar="USERNAME",
+                    help="Add or update a user in the htpasswd file and exit")
+    ap.add_argument("--htpasswd", metavar="FILE", default=str(HTPASSWD_FILE),
+                    help=f"htpasswd file to use (default: {HTPASSWD_FILE})")
+    ap.add_argument("--gencert", action="store_true",
+                    help="Generate a self-signed TLS cert+key and exit")
+    ap.add_argument("--cert", metavar="FILE", default=TLS_CERT_FILE,
+                    help=f"cert output path for --gencert (default: {TLS_CERT_FILE})")
+    ap.add_argument("--key", metavar="FILE", default=TLS_KEY_FILE,
+                    help=f"key output path for --gencert (default: {TLS_KEY_FILE})")
+    ap.add_argument("--days", metavar="N", type=int, default=3650,
+                    help="cert validity in days for --gencert (default: 3650)")
+    ap.add_argument("--cn", metavar="HOSTNAME", default="localhost",
+                    help="Common Name / SAN hostname for --gencert (default: localhost)")
+    args = ap.parse_args()
+
+    if args.gencert:
+        try:
+            import ipaddress
+            from datetime import timezone as _tz
+            from cryptography import x509  # type: ignore
+            from cryptography.x509.oid import NameOID  # type: ignore
+            from cryptography.hazmat.primitives import hashes, serialization  # type: ignore
+            from cryptography.hazmat.primitives.asymmetric import rsa  # type: ignore
+        except ImportError:
+            raise SystemExit("cryptography package required: pip install cryptography")
+        print(f"Generating 2048-bit RSA key and self-signed cert ({args.days} days, CN={args.cn!r})...")
+        key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, args.cn)])
+        san = x509.SubjectAlternativeName([
+            x509.DNSName(args.cn),
+            x509.DNSName("localhost"),
+            x509.IPAddress(ipaddress.IPv4Address("127.0.0.1")),
+        ])
+        now = datetime.now(_tz.utc)
+        cert = (
+            x509.CertificateBuilder()
+            .subject_name(name).issuer_name(name)
+            .public_key(key.public_key())
+            .serial_number(x509.random_serial_number())
+            .not_valid_before(now)
+            .not_valid_after(now + timedelta(days=args.days))
+            .add_extension(san, critical=False)
+            .sign(key, hashes.SHA256())
+        )
+        Path(args.key).write_bytes(
+            key.private_bytes(serialization.Encoding.PEM,
+                              serialization.PrivateFormat.TraditionalOpenSSL,
+                              serialization.NoEncryption()))
+        Path(args.cert).write_bytes(cert.public_bytes(serialization.Encoding.PEM))
+        print(f"  Key : {args.key}")
+        print(f"  Cert: {args.cert}")
+        print("Done. Set HTTPS_ENABLED=True and update TLS_CERT_FILE/TLS_KEY_FILE in wiki.py.")
+        sys.exit(0)
+
+    if args.adduser:
+        try:
+            import bcrypt as _chk  # noqa: F401
+        except ImportError:
+            raise SystemExit("bcrypt is required: pip install bcrypt")
+        htfile = Path(args.htpasswd)
+        pw1 = getpass.getpass(f"Password for {args.adduser!r}: ")
+        pw2 = getpass.getpass("Confirm password: ")
+        if not pw1:
+            raise SystemExit("Password must not be empty.")
+        if pw1 != pw2:
+            raise SystemExit("Passwords do not match.")
+        existed = htfile.exists()
+        _htpasswd_set(args.adduser, pw1, htfile)
+        action = "Updated" if existed else "Created"
+        print(f"{action} entry for {args.adduser!r} in {htfile}")
+        sys.exit(0)
+
+    # Server mode — run startup validation then start uvicorn
+    if AUTH_ENABLED:
+        try:
+            import bcrypt as _chk2  # noqa: F401
+        except ImportError:
+            raise SystemExit("AUTH_ENABLED=True requires bcrypt: pip install bcrypt")
+        if not HTPASSWD_FILE.exists():
+            raise SystemExit(f"AUTH_ENABLED=True but {HTPASSWD_FILE} not found.\n"
+                             f"Create it with: python wiki.py --adduser USERNAME")
+    if HTTPS_ENABLED:
+        if not Path(TLS_CERT_FILE).exists():
+            raise SystemExit(f"HTTPS_ENABLED=True but cert file not found: {TLS_CERT_FILE}")
+        if not Path(TLS_KEY_FILE).exists():
+            raise SystemExit(f"HTTPS_ENABLED=True but key file not found: {TLS_KEY_FILE}")
+
+    kwargs: dict = {"host": HOST, "port": PORT, "reload": False}
+    if HTTPS_ENABLED:
+        kwargs["ssl_certfile"] = TLS_CERT_FILE
+        kwargs["ssl_keyfile"]  = TLS_KEY_FILE
+    uvicorn.run(app, **kwargs)

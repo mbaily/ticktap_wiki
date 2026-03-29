@@ -370,7 +370,135 @@ If `alt` is omitted, the filename (without extension) is used.
 
 ---
 
-## 16. Open Questions
+## 16. Authentication & HTTPS
+
+### 16.1 Goals
+
+- Authentication is **optional** — a vanilla HTTP, no-login deployment must still work out of the box.
+- All authenticated users see and edit the same data; there is no per-user isolation or ACL.
+- Login must survive long browser sessions against a **self-signed TLS certificate** without the token expiring after the typical 1-day cookie lifetime browsers enforce in that scenario.
+- HTTPS is separately optional, configured alongside auth or independently.
+
+### 16.2 Configuration Block
+
+A `# ── config ──` section is added near the top of `wiki.py`, immediately after the existing startup constants, using plain Python assignments. To change a setting, edit `wiki.py` directly:
+
+```python
+# ── config ──────────────────────────────────────────────────────────────────
+AUTH_ENABLED      = False          # set True to require login
+HTPASSWD_FILE     = Path(".htpasswd")
+TOKEN_EXPIRY_DAYS = 30             # how long a login token stays valid
+TOKEN_FILE        = Path(__file__).parent / ".wiki_tokens"
+
+HTTPS_ENABLED     = False          # set True to enable TLS
+TLS_CERT_FILE     = "cert.pem"
+TLS_KEY_FILE      = "key.pem"
+```
+
+- All values have sensible defaults; nothing needs to be changed for an unauthenticated HTTP deployment.
+- There are no environment-variable overrides; the config block is the single source of truth.
+
+### 16.3 .htpasswd Authentication
+
+- Standard Apache `.htpasswd` format: one `username:hashed_password` entry per line.
+- Password hash algorithm: **bcrypt** (`$2y$` / `$2b$` prefix). SHA-1 (`{SHA}`) accepted for read compatibility; MD5 crypt (`$apr1$`) optional.
+- Dependency: `passlib[bcrypt]` (install separately; the server prints a clear message and refuses to start if `AUTH_ENABLED=1` and `passlib` is not importable).
+- The `.htpasswd` file is read fresh on each login attempt (so adding/removing users takes effect immediately without a restart).
+- On start-up, if `AUTH_ENABLED=1` and `HTPASSWD_FILE` does not exist, the server prints a warning and refuses to start.
+
+### 16.4 Server-Side Token File (No Browser Cookies)
+
+**Problem:** browsers enforce a ≤24 h `Max-Age` / session expiry for cookies set over HTTPS with a self-signed certificate in many configurations. This makes a wiki on a LAN with a self-signed cert effectively unusable.
+
+**Solution:** tokens are stored server-side in a JSON file (`TOKEN_FILE`, default `.wiki_tokens` next to `wiki.py`) and passed to the client as a plain query-string or `Authorization` header value — but in practice delivered via a `<meta http-equiv="refresh">` redirect that embeds the token in the URL, or as a long-lived `SameSite=Strict` cookie where the browser allows it.
+
+**Token file format** (`.wiki_tokens`, JSON):
+```json
+{
+  "a3f9…": {"user": "alice", "issued": "2026-03-01T10:00:00", "expires": "2026-04-01T10:00:00"},
+  …
+}
+```
+
+- Token is a 32-byte URL-safe hex string (`secrets.token_hex(32)`).
+- `TOKEN_EXPIRY_DAYS` controls lifetime (default 30 days).
+- On each authenticated request the server checks `expires`; expired tokens are rejected and pruned lazily.
+- Token file is written atomically (write to `.wiki_tokens.tmp`, rename).
+- If the token file is deleted or corrupted, all sessions are invalidated; users must log in again.
+
+### 16.5 Login Flow
+
+1. Unauthenticated request → redirect to `GET /login?next={original_url}`.
+2. `GET /login` → render a login form (username + password).
+3. `POST /login` → validate credentials against `.htpasswd`:
+   - On success: generate token, append to token file, set `Set-Cookie: wiki_token={token}; Path=/; SameSite=Strict; HttpOnly` (and `Secure` if HTTPS), then redirect to `next`.
+   - On failure: re-render login form with a generic error ("Invalid credentials").
+4. Every protected route checks for a valid token in:
+   - Cookie `wiki_token` (primary — works when browser accepts the cookie).
+   - Query parameter `?wiki_token=…` (fallback for clients that strip cookies on self-signed TLS).
+5. `GET /logout` → delete the token from the token file and clear the cookie, redirect to `/login`.
+
+### 16.6 HTTPS
+
+- When `HTTPS_ENABLED=1`, Uvicorn is started with `ssl_certfile=TLS_CERT_FILE` and `ssl_keyfile=TLS_KEY_FILE`.
+- Certificate and key paths are relative to the working directory (or absolute).
+- If either file is missing at startup, the server prints a clear error and exits.
+- HTTP and HTTPS are mutually exclusive in a single process; no automatic redirect from port 80 → 443.
+
+### 16.7 Route Protection
+
+- When `AUTH_ENABLED=0`: all routes behave exactly as today — no login, no token check.
+- When `AUTH_ENABLED=1`: every route except `GET /login` and `POST /login` requires a valid token.
+  - The `GET /files/{path}` serve route is also protected (files are private).
+  - The AJAX `POST /toggle/…` endpoint accepts the token in the `Authorization: Bearer {token}` header as well as cookie/query-param (JS fetch can include it easily).
+- A FastAPI dependency (`require_auth`) is injected into every protected route; it raises HTTP 401 / redirects to login transparently.
+
+### 16.8 Security Notes
+
+- Tokens are **not JWTs** — they are opaque random strings. The server is the authority.
+- Brute-force: after 5 consecutive failed login attempts from the same IP within 60 seconds, the login endpoint returns HTTP 429 for 60 seconds (in-memory counter, resets on server restart).
+- The token file must not be served by the wiki itself; `GET /files/…` and `GET /wiki/…` cannot reach it (it lives at the same level as `wiki.py`, not inside `pages/` or `files/`).
+- Password comparison always uses the constant-time functions provided by `passlib`.
+
+### 16.9 Built-in htpasswd Manager (Windows-friendly)
+
+Because Apache's `htpasswd` command-line tool is not available on Windows, `wiki.py` includes a `--adduser` subcommand that creates or updates entries in the htpasswd file without any external tools:
+
+```
+python wiki.py --adduser alice
+python wiki.py --adduser alice --htpasswd /path/to/.htpasswd
+```
+
+Behaviour:
+- Prompts for a password and a confirmation (using `getpass`, so the password is never echoed).
+- Rejects empty passwords and mismatched confirmations.
+- Creates the file if it does not exist; otherwise loads and updates the existing file.
+- Saves with bcrypt hashing (requires `pip install bcrypt`).
+- Exits immediately after saving — the server is **not** started.
+- `--htpasswd FILE` overrides the `HTPASSWD_FILE` config value for that one invocation.
+
+### 16.10 Self-signed Certificate Generator
+
+`wiki.py` includes a `--gencert` subcommand to generate a self-signed TLS certificate + private key without needing OpenSSL on the PATH (requires `pip install cryptography`):
+
+```
+python wiki.py --gencert
+python wiki.py --gencert --cert server.pem --key server.key --days 3650 --cn mywiki.local
+```
+
+Options:
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--cert FILE` | `cert.pem` | Output path for the certificate |
+| `--key FILE` | `key.pem` | Output path for the private key |
+| `--days N` | `3650` | Validity period in days (~10 years) |
+| `--cn HOSTNAME` | `localhost` | Common Name and primary SAN hostname |
+
+The cert always includes `localhost` and `127.0.0.1` as additional SANs. After generating, set `HTTPS_ENABLED = True` and update `TLS_CERT_FILE` / `TLS_KEY_FILE` in the config block.
+
+---
+
+## 17. Open Questions
 
 1. ~~**Heading syntax**: keep DokuWiki-style `=` or switch to Markdown `#` to reuse `mistune`/`markdown-it` and save ~40 parser LOC?~~ **Resolved: DokuWiki `=` syntax kept.** Preserves DokuWiki compatibility; the LOC saving argument became moot as the codebase grew.
 2. ~~**Checkbox persistence**: toggle in-place inside the `.wiki` file (mutates source) or sidecar `.state` file?~~ **Resolved: mutates the source file directly.** The toggle endpoint rewrites the `.wiki` file with the checkbox state changed on the relevant line; `data-line` in the HTML tracks the exact line number (adjusted for META header offset).
