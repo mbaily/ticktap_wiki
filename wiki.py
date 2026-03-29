@@ -1,6 +1,6 @@
 import os, re, html, time, secrets
 from pathlib import Path
-from fastapi import FastAPI, File, Form, UploadFile
+from fastapi import FastAPI, File, Form, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 import uvicorn
 
@@ -324,6 +324,7 @@ def nav_bar(search_q: str = "") -> str:
     q = html.escape(search_q)
     return (f'<nav><a href="/wiki/Home"><strong>&#128366; Wiki</strong></a>'
             f'<a href="/sitemap">Site Map</a><a href="/new">+ New Page</a>'
+            f'<a href="/orphans">&#128204; Orphaned Files</a>'
             f'<form method="get" action="/search">'
             f'<input type="search" name="q" placeholder="Search…" value="{q}"></form></nav>')
 
@@ -396,7 +397,7 @@ def files_section(ns: str) -> str:
             markup = (f'{{{{{child.name}|{lbl}}}}}' if ext in IMAGE_EXTS
                       else f'[[file:{child.name}|{lbl}]]')
         fp = f"{ns}/{child.name}" if ns else child.name
-        del_btn = (f'<form method="post" action="/file-delete/{fp}" style="display:inline">'
+        del_btn = (f'<form method="post" action="/file-delete/{html.escape(fp)}" style="display:inline">'
                    f'<button type="submit" title="Delete" '
                    f'style="background:none;border:none;cursor:pointer;color:#c0392b">&#128465;</button></form>')
         items.append(
@@ -681,10 +682,25 @@ def _upload_page(ns: str, results: list | None) -> HTMLResponse:
     action = f"/upload/{ns}" if ns else "/upload"
     res_html = ""
     if results:
+        has_images = any(r.get("ok") and r.get("is_img") for r in results)
+        toggle_html = ""
+        if has_images:
+            toggle_html = (
+                '<label style="font-size:.85rem;cursor:pointer;user-select:none">'
+                '<input type="checkbox" id="lnk-toggle" style="margin-right:.3rem" onchange="updateSnippet()">'
+                'Use <code>[[file:…]]</code> links instead of <code>{{…}}</code> embeds for images'
+                '</label><br>'
+            )
         rows = "".join(
-            f'<tr><td style="padding:.3rem .6rem">{html.escape(r["name"])}</td>'
+            f'<tr>'
+            f'<td style="padding:.3rem .6rem">{html.escape(r["name"])}</td>'
             f'<td style="padding:.3rem .6rem">{"&#10003;" if r["ok"] else "&#10007; " + html.escape(r.get("error", ""))}</td>'
-            f'<td style="padding:.3rem .6rem;font-family:monospace;font-size:.85rem">{html.escape(r.get("markup", ""))}</td></tr>'
+            f'<td style="padding:.3rem .6rem;font-family:monospace;font-size:.85rem" '
+            f'data-embed="{html.escape(r.get("markup_embed", r.get("markup", "")))}" '
+            f'data-link="{html.escape(r.get("markup_link",  r.get("markup", "")))}" '
+            f'data-isimg="{"1" if r.get("is_img") else "0"}" '
+            f'class="markup-cell">{html.escape(r.get("markup", ""))}</td>'
+            f'</tr>'
             for r in results
         )
         snippet = "\n".join(r["markup"] for r in results if r.get("ok") and r.get("markup"))
@@ -695,11 +711,23 @@ def _upload_page(ns: str, results: list | None) -> HTMLResponse:
             f'<th style="padding:.3rem .6rem;text-align:left">File</th>'
             f'<th style="padding:.3rem .6rem;text-align:left">Status</th>'
             f'<th style="padding:.3rem .6rem;text-align:left">Markup</th></tr>{rows}</table>'
+            f'{toggle_html}'
             f'<p><strong>Paste into your page:</strong></p>'
             f'<textarea id="snip" rows="{max(2, snippet.count(chr(10)) + 1)}" '
             f'style="width:100%;font-family:monospace">{snip_esc}</textarea><br>'
             f'<button onclick="navigator.clipboard.writeText(document.getElementById(\'snip\').value).then(()=>window.close())" '
             f'style="margin:.5rem 0;padding:.4rem .8rem;cursor:pointer">&#128203; Copy links &amp; close tab</button>'
+            f'<script>'
+            f'function updateSnippet(){{'
+            f'  var useLink=document.getElementById(\'lnk-toggle\')&&document.getElementById(\'lnk-toggle\').checked;'
+            f'  var lines=[];'
+            f'  document.querySelectorAll(".markup-cell").forEach(function(td){{'
+            f'    var m=(useLink&&td.dataset.isimg==="1")?td.dataset.link:td.dataset.embed;'
+            f'    if(m){{td.textContent=m;lines.push(m);}}'
+            f'  }});'
+            f'  document.getElementById(\'snip\').value=lines.join(\'\\n\');'
+            f'}}'
+            f'</script>'
         )
     body = (
         f'<div class="layout"><div class="content">'
@@ -743,13 +771,16 @@ async def _do_upload(ns: str, files: list[UploadFile]) -> HTMLResponse:
         (dest / uname).write_bytes(data)
         ns_c = ns.replace("/", ":") if ns else ""
         lbl = re.sub(r"[|{}\[\]]", "_", Path(f.filename).stem)
+        is_img = ext in IMAGE_EXTS
         if ns_c:
-            markup = (f'{{{{{ns_c}:{uname}|{lbl}}}}}' if ext in IMAGE_EXTS
-                      else f'[[file:{ns_c}:{uname}|{lbl}]]')
+            markup_embed = f'{{{{{ns_c}:{uname}|{lbl}}}}}'
+            markup_link  = f'[[file:{ns_c}:{uname}|{lbl}]]'
         else:
-            markup = (f'{{{{{uname}|{lbl}}}}}' if ext in IMAGE_EXTS
-                      else f'[[file:{uname}|{lbl}]]')
-        results.append({"name": f.filename, "ok": True, "markup": markup})
+            markup_embed = f'{{{{{uname}|{lbl}}}}}'
+            markup_link  = f'[[file:{uname}|{lbl}]]'
+        markup = markup_embed if is_img else markup_link
+        results.append({"name": f.filename, "ok": True, "markup": markup,
+                        "markup_embed": markup_embed, "markup_link": markup_link, "is_img": is_img})
     return _upload_page(ns, results)
 
 
@@ -793,7 +824,7 @@ def serve_file(filepath: str):
 
 
 @app.post("/file-delete/{filepath:path}", response_class=HTMLResponse)
-async def file_delete(filepath: str):
+async def file_delete(request: Request, filepath: str):
     filepath = filepath.strip("/")
     if "/" in filepath:
         f_ns, filename = filepath.rsplit("/", 1)
@@ -805,7 +836,89 @@ async def file_delete(filepath: str):
             p.unlink()
     except ValueError:
         return HTMLResponse("Invalid file path", 400)
-    return RedirectResponse(f"/ns/{f_ns}" if f_ns else "/sitemap", status_code=303)
+    # Redirect back to wherever the delete was triggered from
+    ref = request.headers.get("referer", "")
+    if ref and ref.startswith(("http://", "https://")):
+        # Only follow same-host referers to avoid open redirects
+        from urllib.parse import urlparse
+        if urlparse(ref).netloc == request.headers.get("host", ""):
+            return RedirectResponse(ref, status_code=303)
+    return RedirectResponse(f"/ns/{f_ns}" if f_ns else "/orphans", status_code=303)
+
+
+@app.get("/orphans", response_class=HTMLResponse)
+def orphans():
+    # Collect every file stored under FILES_DIR
+    all_files: set[str] = set()
+    if FILES_DIR.is_dir():
+        for f in FILES_DIR.rglob("*"):
+            if f.is_file() and f.suffix.lower().lstrip(".") in ALLOWED_EXTS:
+                rel = f.relative_to(FILES_DIR).as_posix()
+                all_files.add(rel)
+
+    # Collect every file reference from all .wiki pages
+    # Matches both  {{[ns:]filename.ext[|label]}}  and  [[file:[ns:]filename.ext[|label]]]
+    REF_RE = re.compile(r"\{\{([^|{}]+)(?:\|[^}]*)?\}\}|\[\[file:([^|\]]+)(?:\|[^\]]*)?\]\]")
+    referenced: set[str] = set()
+    for wf in PAGES_DIR.rglob("*.wiki"):
+        try:
+            text = wf.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        for m in REF_RE.finditer(text):
+            raw = (m.group(1) or m.group(2)).strip()
+            # strip leading :
+            if raw.startswith(":"):
+                raw = raw[1:]
+            # convert colon-style namespace to slash
+            referenced.add(raw.replace(":", "/"))
+
+    orphaned = sorted(all_files - referenced)
+
+    if not orphaned:
+        body = ('<div class="layout"><div class="content">'
+                '<h1>&#128204; Orphaned Files</h1>'
+                '<p>No orphaned files — every file has at least one wiki link.</p>'
+                '</div></div>')
+        return HTMLResponse(shell("Orphaned Files", body))
+
+    rows = ""
+    for rel in orphaned:
+        f_ns, filename = rel.rsplit("/", 1) if "/" in rel else ("", rel)
+        ext = Path(filename).suffix.lower().lstrip(".")
+        try:
+            st = (FILES_DIR / rel).stat()
+            size_str = f"{st.st_size // 1024} KB" if st.st_size >= 1024 else f"{st.st_size} B"
+            mtime = time.strftime("%Y-%m-%d", time.localtime(st.st_mtime))
+        except OSError:
+            size_str, mtime = "?", "unknown"
+        preview = ""
+        if ext in IMAGE_EXTS and ext != "svg":
+            preview = f'<img src="/files/{html.escape(rel)}" style="max-height:3rem;vertical-align:middle;margin-right:.4rem">'
+        del_btn = (f'<form method="post" action="/file-delete/{html.escape(rel)}" style="display:inline">'
+                   f'<button type="submit" title="Delete" '
+                   f'style="background:none;border:none;cursor:pointer;color:#c0392b;font-size:1.1rem">&#128465;</button></form>')
+        rows += (f'<tr>'
+                 f'<td style="padding:.4rem .6rem">{preview}<a href="/files/{html.escape(rel)}">{html.escape(filename)}</a></td>'
+                 f'<td style="padding:.4rem .6rem;color:#888">{html.escape(f_ns) if f_ns else "(root)"}</td>'
+                 f'<td style="padding:.4rem .6rem;color:#888">{size_str}</td>'
+                 f'<td style="padding:.4rem .6rem;color:#888">{mtime}</td>'
+                 f'<td style="padding:.4rem .6rem">{del_btn}</td>'
+                 f'</tr>')
+
+    body = (f'<div class="layout"><div class="content">'
+            f'<h1>&#128204; Orphaned Files</h1>'
+            f'<p>{len(orphaned)} file{"s" if len(orphaned) != 1 else ""} not referenced by any wiki page:</p>'
+            f'<table style="width:100%;border-collapse:collapse;border:1px solid #ddd;margin-top:.8rem">'
+            f'<tr style="background:#ecf0f1">'
+            f'<th style="padding:.4rem .6rem;text-align:left">File</th>'
+            f'<th style="padding:.4rem .6rem;text-align:left">Namespace</th>'
+            f'<th style="padding:.4rem .6rem;text-align:left">Size</th>'
+            f'<th style="padding:.4rem .6rem;text-align:left">Modified</th>'
+            f'<th style="padding:.4rem .6rem"></th>'
+            f'</tr>{rows}</table>'
+            f'</div></div>')
+    return HTMLResponse(shell("Orphaned Files", body))
 
 
 # ── startup ────────────────────────────────────────────────────────────────────
