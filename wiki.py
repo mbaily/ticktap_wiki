@@ -964,7 +964,7 @@ def _upload_page(ns: str, results: list | None, request: Request | None = None) 
         f'<button type="submit" style="padding:.4rem .8rem">&#8593; Upload</button>'
         f'</form></div></div>'
     )
-    return HTMLResponse(shell(f"Upload — {html.escape(ns_display)}", body))
+    return HTMLResponse(shell(f"Upload \u2014 {html.escape(ns_display)}", body, request=request))
 
 async def _do_upload(ns: str, files: list[UploadFile], request: Request | None = None) -> HTMLResponse:
     if ns:
@@ -1243,9 +1243,12 @@ CONFIGURATION
             cn_san = x509.IPAddress(cn_ip)
         except ValueError:
             cn_san = x509.DNSName(args.cn)
-        san_entries = [cn_san]
-        if args.cn not in ("localhost", "127.0.0.1"):
-            san_entries += [x509.DNSName("localhost"), x509.IPAddress(ipaddress.IPv4Address("127.0.0.1"))]
+        # Always include localhost + 127.0.0.1 as extras; deduplicate if cn is one of them
+        san_entries: list = [cn_san]
+        if args.cn != "localhost":
+            san_entries.append(x509.DNSName("localhost"))
+        if args.cn != "127.0.0.1":
+            san_entries.append(x509.IPAddress(ipaddress.IPv4Address("127.0.0.1")))
         san = x509.SubjectAlternativeName(san_entries)
         now = datetime.now(_tz.utc)
         cert = (
