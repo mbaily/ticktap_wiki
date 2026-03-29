@@ -44,7 +44,8 @@ def strip_meta(src: str) -> tuple[str, int]:
     return src, 0
 
 def slug(text: str) -> str:
-    return re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
+    s = re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
+    return s or "heading"
 
 # ── markup parser ──────────────────────────────────────────────────────────────
 
@@ -82,7 +83,7 @@ def parse_inline(text: str, cur_ns: str = "") -> str:
         except ValueError:
             exists = False
         cls = "" if exists else ' class="new-page"'
-        return f'<a href="/wiki/{url}"{cls}>{lbl}</a>'
+        return f'<a href="/wiki/{html.escape(url)}"{cls}>{lbl}</a>'
 
     def restore(m):
         return render_link(stash[int(m.group(1))])
