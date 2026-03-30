@@ -633,7 +633,7 @@ mark{background:#5a4a00;color:#ffd}
 .search-page-result{background:#16213e;border-color:#2a3f6f}
 .search-hit{color:#8ab4f8;border-left-color:#2a3f6f}
 .pin-bar{background:#0e1f33}
-.todo-done{color:#889}
+.todo-done{color:#8a9a9a}
 input[type=checkbox]{background:#1a1a2e;border-color:#e74c3c}
 input[type=checkbox]:checked{background:#e74c3c;border-color:#e74c3c}
 input[type=checkbox]:checked::after{border-color:#fff}
