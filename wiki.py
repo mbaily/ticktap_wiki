@@ -558,7 +558,7 @@ textarea{width:100%;font-family:monospace;font-size:.95rem;padding:.5rem;border:
 .preview-box{margin-top:1rem;padding:1rem;border:1px dashed #aaa;border-radius:4px;background:#fff}
 .notice{background:#ffeeba;border:1px solid #ffc107;padding:.8rem 1rem;border-radius:4px;margin:1rem 0}
 .breadcrumb{font-size:.85rem;color:#666;margin-bottom:.5rem}.breadcrumb a{color:#2c3e50}
-input[type=checkbox]{cursor:pointer;width:1.1em;height:1.1em;vertical-align:middle}
+input[type=checkbox]{cursor:pointer;width:1.1em;height:1.1em;vertical-align:middle;accent-color:#e74c3c}
 .todo-done{opacity:.6}
 .todo-inprogress{font-style:italic}.todo-inprogress>input[type=checkbox]{opacity:.7}
 .search-result{margin:.6rem 0;padding:.5rem;border:1px solid #ddd;border-radius:3px;background:#fff}
@@ -584,6 +584,7 @@ input[type=checkbox]{cursor:pointer;width:1.1em;height:1.1em;vertical-align:midd
   .toolbar{flex-wrap:wrap;gap:.4rem}
   .content{padding:.7rem}
   .login-box{margin:1rem auto;padding:1.2rem}
+  input[type=checkbox]{width:1.4em;height:1.4em}
 }
 .tag-pill{display:inline-block;background:#e8f4f8;color:#2c3e50;border-radius:10px;padding:.1rem .5rem;font-size:.8rem;text-decoration:none;margin:.1rem .1rem;vertical-align:middle}
 .tag-pill:hover{background:#d0e8f0}
