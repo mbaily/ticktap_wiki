@@ -589,7 +589,9 @@ def _now() -> datetime:
 def _load_tokens() -> dict:
     if TOKEN_FILE.exists():
         try:
-            return json.loads(TOKEN_FILE.read_text(encoding="utf-8"))
+            data = json.loads(TOKEN_FILE.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                return data
         except Exception:
             pass
     return {}
@@ -602,10 +604,14 @@ def _save_tokens(tokens: dict):
 def _issue_token(username: str) -> str:
     token = secrets.token_hex(32)
     tokens = _load_tokens()
-    # prune expired
+    # prune expired — skip any malformed entries rather than crashing
     now = _now()
-    tokens = {k: v for k, v in tokens.items()
-              if datetime.fromisoformat(v["expires"]) > now}
+    def _is_valid_unexpired(v: object) -> bool:
+        try:
+            return isinstance(v, dict) and datetime.fromisoformat(v["expires"]) > now
+        except (KeyError, ValueError, TypeError):
+            return False
+    tokens = {k: v for k, v in tokens.items() if _is_valid_unexpired(v)}
     tokens[token] = {
         "user": username,
         "issued": now.isoformat(),
@@ -620,11 +626,14 @@ def _validate_token(token: str) -> str | None:
         return None
     tokens = _load_tokens()
     entry = tokens.get(token)
-    if not entry:
+    if not entry or not isinstance(entry, dict):
         return None
-    if datetime.fromisoformat(entry["expires"]) <= _now():
+    try:
+        if datetime.fromisoformat(entry["expires"]) <= _now():
+            return None
+        return entry["user"] or None
+    except (KeyError, ValueError, TypeError):
         return None
-    return entry["user"]
 
 def _revoke_token(token: str):
     tokens = _load_tokens()
