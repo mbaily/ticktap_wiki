@@ -178,6 +178,23 @@ def strip_meta(src: str) -> tuple[str, int]:
             return after, offset
     return src, 0
 
+
+def parse_meta(src: str) -> dict[str, str]:
+    """Extract key:value pairs from the ~~META: block at the top of a page."""
+    if not src.startswith("~~META:"):
+        return {}
+    m = re.search(r"(?m)^~~$", src[7:])
+    if not m:
+        return {}
+    block = src[7:7 + m.start()]
+    result: dict[str, str] = {}
+    for line in block.splitlines():
+        if ":" in line:
+            k, v = line.split(":", 1)
+            result[k.strip().lower()] = v.strip()
+    return result
+
+
 def slug(text: str) -> str:
     s = re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
     return s or "heading"
@@ -400,8 +417,9 @@ def parse(src: str, name: str = "", section_edit: bool = True) -> tuple[str, lis
             todo_level = todo_indent // 2
             state, text = cbm.group(2), parse_inline(cbm.group(3), cur_ns)
             checked = " checked" if state == "x" else ""
+            state_cls = " todo-done" if state == "x" else (" todo-inprogress" if state == "~" else "")
             indent_style = f' style="padding-left:{todo_level * 1.5}em"' if todo_level else ''
-            out.append(f'<p class="todo" data-line="{i + meta_offset}" data-indent="{todo_indent}" data-prefix="[ ] "{indent_style}><input type="checkbox"{checked} data-line="{i + meta_offset}" data-name="{html.escape(name)}"> {text}</p>')
+            out.append(f'<p class="todo{state_cls}" draggable="true" data-line="{i + meta_offset}" data-state="{state}" data-indent="{todo_indent}" data-prefix="[ ] "{indent_style}><input type="checkbox"{checked} data-line="{i + meta_offset}" data-name="{html.escape(name)}"> {text}</p>')
             continue
 
         # table rows — DokuWiki syntax: lines starting with | or ^
@@ -521,6 +539,9 @@ textarea{width:100%;font-family:monospace;font-size:.95rem;padding:.5rem;border:
 .notice{background:#ffeeba;border:1px solid #ffc107;padding:.8rem 1rem;border-radius:4px;margin:1rem 0}
 .breadcrumb{font-size:.85rem;color:#666;margin-bottom:.5rem}.breadcrumb a{color:#2c3e50}
 input[type=checkbox]{cursor:pointer;width:1.1em;height:1.1em;vertical-align:middle}
+.todo-done{opacity:.6}.todo-done input[type=checkbox]{accent-color:#27ae60}
+.todo-inprogress input[type=checkbox]{accent-color:#e67e22}
+.todo-inprogress>input[type=checkbox]::after{content:"~"}
 .search-result{margin:.6rem 0;padding:.5rem;border:1px solid #ddd;border-radius:3px;background:#fff}
 .search-result a{font-weight:bold}
 .snippet{font-size:.85rem;color:#555;font-family:monospace}
@@ -545,6 +566,15 @@ input[type=checkbox]{cursor:pointer;width:1.1em;height:1.1em;vertical-align:midd
   .content{padding:.7rem}
   .login-box{margin:1rem auto;padding:1.2rem}
 }
+.tag-pill{display:inline-block;background:#e8f4f8;color:#2c3e50;border-radius:10px;padding:.1rem .5rem;font-size:.8rem;text-decoration:none;margin:.1rem .1rem}
+.tag-pill:hover{background:#d0e8f0}
+mark{background:#fff3cd;padding:0 .1rem;border-radius:2px}
+.search-page-result{margin:.8rem 0;padding:.6rem;border:1px solid #ddd;border-radius:3px;background:#fff}
+.search-page-result h3{font-size:1rem;margin:0 0 .3rem}
+.search-hit{font-size:.85rem;font-family:monospace;color:#444;padding:.15rem .3rem;border-left:3px solid #ddd;margin:.2rem 0}
+.pin-bar{background:#243447;padding:.3rem 1rem;display:flex;gap:.5rem;flex-wrap:wrap;align-items:center;font-size:.85rem}
+.pin-bar a{color:#8ab4f8;text-decoration:none;background:rgba(255,255,255,.08);padding:.15rem .5rem;border-radius:3px}.pin-bar a:hover{text-decoration:underline}
+p.todo[draggable]{cursor:grab}p.todo.drag-over{border-top:2px solid #3498db}
 """
 
 CSS_DARK = """
@@ -576,11 +606,25 @@ a.new-page{color:#f87171}
 .wiki-table td,.wiki-table th{border-color:#2a3f6f}
 .wiki-table th{background:#1e2a45}
 .wiki-table tr:nth-child(even) td{background:#14192e}
+.tag-pill{background:#1e3a4a;color:#8ab4f8}.tag-pill:hover{background:#254a5e}
+mark{background:#5a4a00;color:#ffd}
+.search-page-result{background:#16213e;border-color:#2a3f6f}
+.search-hit{color:#8ab4f8;border-left-color:#2a3f6f}
+.pin-bar{background:#0e1f33}
 """
 
 JS = """
 document.querySelectorAll('input[type=checkbox][data-line]').forEach(cb=>{
-  cb.addEventListener('change',()=>fetch(`/toggle/${cb.dataset.name}/${cb.dataset.line}`,{method:'POST'}));
+  cb.addEventListener('click',async e=>{
+    e.preventDefault();
+    const p=cb.closest('p.todo');
+    const newState=await fetch(`/toggle/${cb.dataset.name}/${cb.dataset.line}`,{method:'POST'}).then(r=>r.text());
+    p.dataset.state=newState;
+    cb.checked=(newState==='x');
+    p.classList.remove('todo-done','todo-inprogress');
+    if(newState==='x')p.classList.add('todo-done');
+    else if(newState==='~')p.classList.add('todo-inprogress');
+  });
 });
 document.querySelectorAll('textarea').forEach(ta=>{
   ta.addEventListener('keydown',e=>{
@@ -599,10 +643,54 @@ def nav_bar(search_q: str = "", username: str = "") -> str:
               f'&#128274; logout ({html.escape(username)})</a>') if username else ""
     return (f'<nav><a href="/wiki/Home"><strong>&#128366; Wiki</strong></a>'
             f'<a href="/sitemap">Site Map</a><a href="/new">+ New Page</a>'
+            f'<a href="/today">&#128197; Today</a>'
+            f'<a href="/tags">&#127991; Tags</a>'
             f'<a href="/orphans">&#128204; Orphaned Files</a>'
             f'{logout}'
             f'<form method="get" action="/search" {"" if username else "style=\"margin-left:auto\""}>' 
             f'<input type="search" name="q" placeholder="Search…" value="{q}"></form></nav>')
+
+def _get_pins(request: Request | None) -> list[str]:
+    """Return the validated list of pinned page names from the wiki_pins cookie."""
+    if request is None:
+        return []
+    raw = request.cookies.get("wiki_pins", "")
+    if not raw:
+        return []
+    try:
+        pins = json.loads(raw)
+        if not isinstance(pins, list):
+            return []
+    except Exception:
+        return []
+    valid = []
+    for p in pins[:20]:
+        if not isinstance(p, str):
+            continue
+        try:
+            norm = normalize_name(p)
+            page_path(norm)  # validates characters
+            valid.append(norm)
+        except ValueError:
+            continue
+    return valid
+
+
+def _set_pins_cookie(response, pins: list[str]):
+    response.set_cookie("wiki_pins", json.dumps(pins), max_age=365 * 86400,
+                        httponly=True, samesite="strict", secure=HTTPS_ENABLED, path="/")
+
+
+def pins_bar(request: Request | None) -> str:
+    pins = _get_pins(request)
+    if not pins:
+        return '<div id="pin-bar" class="pin-bar" style="display:none"></div>'
+    links = "".join(
+        f'<a href="/wiki/{html.escape(p)}">&#128204; {html.escape(p.split("/")[-1])}</a>'
+        for p in pins
+    )
+    return f'<div id="pin-bar" class="pin-bar">{links}</div>'
+
 
 def shell(title: str, body: str, search_q: str = "", request: Request | None = None) -> str:
     username = ""
@@ -615,7 +703,7 @@ def shell(title: str, body: str, search_q: str = "", request: Request | None = N
             f'<meta name="viewport" content="width=device-width,initial-scale=1">'
             f'<title>{html.escape(title)} \u2014 Wiki</title>'
             f'<style>{CSS}</style>{dark}</head><body>'
-            f'{nav_bar(search_q, username)}{body}'
+            f'{nav_bar(search_q, username)}{pins_bar(request)}{body}'
             f'<script>{JS}</script></body></html>')
 
 def breadcrumb(name: str) -> str:
@@ -905,10 +993,24 @@ def view(request: Request, name: str, _auth: None = Depends(require_auth)):
         mtime = time.strftime("%Y-%m-%d %H:%M", time.localtime(page_path(name).stat().st_mtime))
     except OSError:
         mtime = "unknown"
+    meta = parse_meta(src)
+    tags = [t.strip() for t in meta.get("tags", "").split(",") if t.strip()]
+    tags_html = "".join(
+        f'<a href="/tags/{html.escape(t)}" class="tag-pill">{html.escape(t)}</a>'
+        for t in tags
+    )
+    pins = _get_pins(request)
+    is_pinned = name in pins
+    pin_icon = "&#11088;" if is_pinned else "&#9734;"
+    pin_title = "Unpin page" if is_pinned else "Pin page"
     toolbar = (f'<div class="toolbar">{breadcrumb(name)}'
+               f'{tags_html}'
                f'<span style="margin-left:auto;font-size:.8rem;color:#666">Modified: {mtime}</span>'
                f'<a href="/edit/{name}">[edit page]</a>'
                + (f'<a href="/history/{name}">[history]</a>' if VERSIONING_ENABLED else '') +
+               f'<form method="post" action="/pin/{html.escape(name)}" style="display:inline">'
+               f'<button type="submit" title="{pin_title}" style="padding:.2rem .4rem;font-size:.9rem;background:none;border:1px solid #aaa;border-radius:3px;cursor:pointer">{pin_icon}</button>'
+               f'</form>'
                f'<a href="/delete/{name}" style="color:#c0392b">[delete]</a></div>')
     todo_bar = (
         f'<div id="qtodo-bar" style="display:none;position:fixed;bottom:0;left:0;right:0;'
@@ -928,6 +1030,7 @@ def view(request: Request, name: str, _auth: None = Depends(require_auth)):
         f'border-radius:3px;border:1px solid #777;cursor:pointer;background:none;color:#ddd">&times;</button>'
         f'</div></div>'
         f'<script>'
+        f'var _wikiPage="{html.escape(name)}";'
         f'var _qtodoEl=null,_qtodoLine=-1,_qtodoIndent=0,_qtodoPrefix="[ ] ";'
         f'function qtodoSelect(el){{'
         f'if(_qtodoEl)_qtodoEl.classList.remove("qtodo-sel");'
@@ -945,6 +1048,13 @@ def view(request: Request, name: str, _auth: None = Depends(require_auth)):
         f'if(_qtodoEl)_qtodoEl.classList.remove("qtodo-sel");'
         f'_qtodoEl=null;_qtodoLine=-1;_qtodoIndent=0;_qtodoPrefix="[ ] ";'
         f'document.getElementById("qtodo-bar").style.display="none";'
+        f'}}'
+        f'function qtodoOpenBottom(lastLine){{'
+        f'if(_qtodoEl)_qtodoEl.classList.remove("qtodo-sel");'
+        f'_qtodoEl=null;_qtodoLine=lastLine;_qtodoIndent=0;_qtodoPrefix="[ ] ";'
+        f'document.getElementById("qtodo-preview").textContent="end of page";'
+        f'document.getElementById("qtodo-bar").style.display="flex";'
+        f'var inp=document.getElementById("qtodo-text");inp.value="";inp.focus();'
         f'}}'
         f'async function qtodoSubmit(){{'
         f'var text=document.getElementById("qtodo-text").value.trim();'
@@ -968,15 +1078,19 @@ def view(request: Request, name: str, _auth: None = Depends(require_auth)):
         f'if(_qtodoIndent>0)newEl.style.paddingLeft=(_qtodoIndent/2*1.5)+"em";'
         f'var cb=document.createElement("input");'
         f'cb.type="checkbox";cb.dataset.line=data.line;cb.dataset.name="{html.escape(name)}";'
-        f'cb.addEventListener("change",function(){{'
-        f'  fetch("/toggle/{html.escape(name)}/"+cb.dataset.line,{{method:"POST"}});'
+        f'cb.addEventListener("click",async function(e){{'
+        f'  e.preventDefault();var p=cb.closest("p.todo");'
+        f'  var ns=await fetch("/toggle/{html.escape(name)}/"+cb.dataset.line,{{method:"POST"}}).then(r=>r.text());'
+        f'  p.dataset.state=ns;cb.checked=(ns==="x");'
+        f'  p.classList.remove("todo-done","todo-inprogress");'
+        f'  if(ns==="x")p.classList.add("todo-done");'
+        f'  else if(ns==="~")p.classList.add("todo-inprogress");'
         f'}});'
         f'newEl.appendChild(cb);'
         f'newEl.appendChild(document.createTextNode(" "+text));'
-        f'var anchor=_qtodoEl;'
         f'var content=document.querySelector(".content");'
-        f'while(anchor.parentElement&&anchor.parentElement!==content)anchor=anchor.parentElement;'
-        f'anchor.insertAdjacentElement("afterend",newEl);'
+        f'if(_qtodoEl){{var anchor=_qtodoEl;while(anchor.parentElement&&anchor.parentElement!==content)anchor=anchor.parentElement;anchor.insertAdjacentElement("afterend",newEl);}}'
+        f'else{{content.appendChild(newEl);}}'
         f'newEl.style.background="rgba(39,174,96,.15)";'
         f'setTimeout(function(){{newEl.style.background="";}},800);'
         f'}}else{{'
@@ -1004,9 +1118,40 @@ def view(request: Request, name: str, _auth: None = Depends(require_auth)):
         f'var el=e.target;'
         f'while(el&&el!==this){{if(el.dataset&&el.dataset.line!==undefined){{qtodoSelect(el);return;}}el=el.parentElement;}}'
         f'}});}});'
+        f'(function(){{var _drag=null;'
+        f'document.addEventListener("dragstart",function(e){{'
+        f'var el=e.target.closest("p.todo[draggable]");if(!el)return;'
+        f'_drag=el;setTimeout(function(){{el.style.opacity="0.4";}},0);'
+        f'}});'
+        f'document.addEventListener("dragend",function(){{'
+        f'if(_drag){{_drag.style.opacity="";_drag=null;}}'
+        f'document.querySelectorAll("p.todo.drag-over").forEach(function(el){{el.classList.remove("drag-over");}});'
+        f'}});'
+        f'document.addEventListener("dragover",function(e){{'
+        f'var el=e.target.closest("p.todo[draggable]");if(!el||el===_drag)return;e.preventDefault();'
+        f'document.querySelectorAll("p.todo.drag-over").forEach(function(t){{t.classList.remove("drag-over");}});'
+        f'el.classList.add("drag-over");'
+        f'}});'
+        f'document.addEventListener("drop",function(e){{'
+        f'var target=e.target.closest("p.todo[draggable]");'
+        f'if(!target||!_drag||target===_drag)return;e.preventDefault();'
+        f'target.classList.remove("drag-over");'
+        f'var rect=target.getBoundingClientRect();'
+        f'if(e.clientY<rect.top+rect.height/2)target.insertAdjacentElement("beforebegin",_drag);'
+        f'else target.insertAdjacentElement("afterend",_drag);'
+        f'var order=Array.from(document.querySelectorAll(".content p.todo[data-line]")).map(function(el){{return parseInt(el.dataset.line,10);}});'
+        f'fetch("/reorder-todos/"+_wikiPage,{{method:"POST",headers:{{"Content-Type":"application/json"}},body:JSON.stringify({{order:order}})}});'
+        f'}});}})();'
         f'</script>'
     )
-    body = f'{toolbar}{todo_bar}<div class="layout"><div class="content">{rendered}</div>{toc_html(headings)}</div>'
+    last_line = len(src.splitlines())
+    fab = (
+        f'<button onclick="qtodoOpenBottom({last_line})" title="Quick-add todo at end of page" '
+        f'style="position:fixed;bottom:4.5rem;right:1rem;z-index:99;width:3rem;height:3rem;'
+        f'border-radius:50%;background:#27ae60;color:#fff;border:none;font-size:1.5rem;'
+        f'cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,.3);line-height:1">+</button>'
+    )
+    body = f'{toolbar}{todo_bar}{fab}<div class="layout"><div class="content" data-lastline="{last_line}">{rendered}</div>{toc_html(headings)}</div>'
     return HTMLResponse(shell(name.split("/")[-1], body, request=request))
 
 
@@ -1131,8 +1276,10 @@ async def toggle(request: Request, name: str, line: int, _auth: None = Depends(r
         return HTMLResponse("Out of range", 400)
     ln = lines[line].rstrip("\r\n")
     # Target only the leading checkbox marker to avoid matching [x] inside the text
+    # Cycle: [ ] → [x] → [~] → [ ]
+    _cycle = {" ": "x", "x": "~", "~": " "}
     new_ln = re.sub(r"^(\s*)\[([ x~])\]",
-                    lambda m: m.group(1) + ("[x]" if m.group(2) != "x" else "[ ]"),
+                    lambda m: m.group(1) + "[" + _cycle[m.group(2)] + "]",
                     ln)
     if new_ln == ln:
         return HTMLResponse("ok")  # not a checkbox line
@@ -1143,7 +1290,9 @@ async def toggle(request: Request, name: str, line: int, _auth: None = Depends(r
         write_page(name, "".join(lines), snapshot=False)
     except OSError:
         return HTMLResponse("write failed", 500)
-    return HTMLResponse("ok")
+    # Return the new state character so the client can update the DOM
+    new_state = _cycle.get(re.search(r"\[([ x~])\]", ln).group(1), " ") if re.search(r"\[([ x~])\]", ln) else " "
+    return HTMLResponse(new_state)
 
 
 @app.post("/add-todo/{name:path}")
@@ -1240,22 +1389,49 @@ def sitemap(request: Request, _auth: None = Depends(require_auth)):
 def search(request: Request, q: str = "", _auth: None = Depends(require_auth)):
     if not q:
         return RedirectResponse("/")
+    ql = q.lower()
+
+    def _highlight(text: str) -> str:
+        parts, lo, start = [], text.lower(), 0
+        while True:
+            idx = lo.find(ql, start)
+            if idx == -1:
+                parts.append(html.escape(text[start:]))
+                break
+            parts.append(html.escape(text[start:idx]))
+            parts.append(f'<mark>{html.escape(text[idx:idx + len(q)])}</mark>')
+            start = idx + len(q)
+        return "".join(parts)
+
     results = []
     for f in sorted(PAGES_DIR.rglob("*.wiki")):
         try:
             text = f.read_text(encoding="utf-8")
         except Exception:
             continue
-        for line in text.splitlines():
-            if q.lower() in line.lower():
-                pname = str(f.relative_to(PAGES_DIR).with_suffix("")).replace("\\", "/")
-                snippet = html.escape(line.strip()[:120])
-                results.append(f'<div class="search-result"><a href="/wiki/{html.escape(pname)}">{html.escape(pname)}</a>'
-                                f'<br><span class="snippet">&hellip;{snippet}&hellip;</span></div>')
-                break
+        lines = text.splitlines()
+        hit_indices = [i for i, ln in enumerate(lines) if ql in ln.lower()]
+        if not hit_indices:
+            continue
+        pname = str(f.relative_to(PAGES_DIR).with_suffix("")).replace("\\", "/")
+        shown: set[int] = set()
+        snippets = []
+        for hi in hit_indices:
+            for ci in range(max(0, hi - 1), min(len(lines), hi + 2)):
+                if ci not in shown:
+                    shown.add(ci)
+                    line_h = _highlight(lines[ci].strip()[:180]) if ci == hi else html.escape(lines[ci].strip()[:180])
+                    bg = ' style="background:rgba(52,152,219,.07)"' if ci == hi else ''
+                    snippets.append(f'<div class="search-hit"{bg}>{line_h}</div>')
+        results.append(
+            f'<div class="search-page-result">'
+            f'<h3><a href="/wiki/{html.escape(pname)}">{html.escape(pname)}</a>'
+            f' <small style="color:#888;font-weight:normal">({len(hit_indices)} match{"es" if len(hit_indices) != 1 else ""})</small></h3>'
+            f'{"".join(snippets)}</div>'
+        )
     body = (f'<div class="layout"><div class="content">'
-            f'<h1>Search: {html.escape(q)}</h1>'
-            f'<p>{len(results)} result{"s" if len(results) != 1 else ""}</p>'
+            f'<h1>&#128269; Search: {html.escape(q)}</h1>'
+            f'<p>{len(results)} page{"s" if len(results) != 1 else ""} matched</p>'
             f'{"".join(results) or "<p>No results found.</p>"}'
             f'</div></div>')
     return HTMLResponse(shell(f"Search: {q}", body, search_q=q, request=request))
@@ -1732,6 +1908,134 @@ async def restore_snapshot(name: str, snap: str = Form(""), _auth: None = Depend
     except (ValueError, OSError):
         return HTMLResponse("Restore failed", 500)
     return RedirectResponse(f"/wiki/{name}", status_code=303)
+
+
+# ── today / pin / tags / reorder routes ───────────────────────────────────────
+
+@app.get("/today")
+def today(_auth: None = Depends(require_auth)):
+    tz = ZoneInfo(DISPLAY_TIMEZONE)
+    today_str = datetime.now(tz).strftime("%Y-%m-%d")
+    return RedirectResponse(f"/wiki/journal/{today_str}", status_code=303)
+
+
+@app.post("/pin/{name:path}")
+async def pin_toggle(name: str, request: Request, _auth: None = Depends(require_auth)):
+    name = normalize_name(name)
+    try:
+        page_path(name)
+    except ValueError:
+        return HTMLResponse("Invalid page name", 400)
+    pins = _get_pins(request)
+    if name in pins:
+        pins = [p for p in pins if p != name]
+    else:
+        pins = [p for p in pins if p != name][:19]
+        pins.append(name)
+    resp = RedirectResponse(f"/wiki/{name}", status_code=303)
+    _set_pins_cookie(resp, pins)
+    return resp
+
+
+@app.get("/tags", response_class=HTMLResponse)
+def tags_index(request: Request, _auth: None = Depends(require_auth)):
+    tag_map: dict[str, list[str]] = {}
+    for f in sorted(PAGES_DIR.rglob("*.wiki")):
+        try:
+            src = f.read_text(encoding="utf-8")
+        except Exception:
+            continue
+        meta = parse_meta(src)
+        pname = str(f.relative_to(PAGES_DIR).with_suffix("")).replace("\\", "/")
+        for t in (x.strip() for x in meta.get("tags", "").split(",") if x.strip()):
+            tag_map.setdefault(t, []).append(pname)
+    if not tag_map:
+        body = ('<div class="layout"><div class="content"><h1>&#127991; Tags</h1>'
+                '<div class="notice">No tags found. Add <code>tags: topic, another</code> '
+                'to a page\'s <code>~~META:</code> block.</div></div></div>')
+    else:
+        items = "".join(
+            f'<li style="margin:.4rem 0"><a href="/tags/{html.escape(t)}" class="tag-pill">{html.escape(t)}</a>'
+            f' <small style="color:#888">{len(pages)} page{"s" if len(pages) != 1 else ""}</small>'
+            f' &mdash; ' + ", ".join(
+                f'<a href="/wiki/{html.escape(p)}">{html.escape(p.split("/")[-1])}</a>'
+                for p in pages[:8]
+            ) + ('&hellip;' if len(pages) > 8 else '') + '</li>'
+            for t, pages in sorted(tag_map.items())
+        )
+        body = (f'<div class="layout"><div class="content">'
+                f'<h1>&#127991; Tags ({len(tag_map)})</h1>'
+                f'<ul style="list-style:none;padding:0">{items}</ul></div></div>')
+    return HTMLResponse(shell("Tags", body, request=request))
+
+
+@app.get("/tags/{tag}", response_class=HTMLResponse)
+def tag_pages(request: Request, tag: str, _auth: None = Depends(require_auth)):
+    tag = tag.strip()
+    if not tag or len(tag) > 80:
+        return HTMLResponse("Invalid tag", 400)
+    results = []
+    for f in sorted(PAGES_DIR.rglob("*.wiki")):
+        try:
+            src = f.read_text(encoding="utf-8")
+        except Exception:
+            continue
+        page_tags = [x.strip() for x in parse_meta(src).get("tags", "").split(",") if x.strip()]
+        if tag not in page_tags:
+            continue
+        pname = str(f.relative_to(PAGES_DIR).with_suffix("")).replace("\\", "/")
+        try:
+            mtime = time.strftime("%Y-%m-%d", time.localtime(f.stat().st_mtime))
+        except OSError:
+            mtime = ""
+        results.append(
+            f'<li><a href="/wiki/{html.escape(pname)}">{html.escape(pname)}</a>'
+            f'<small style="color:#888;margin-left:.4rem">{mtime}</small></li>'
+        )
+    body = (
+        f'<div class="layout"><div class="content">'
+        f'<h1>&#127991; Tag: {html.escape(tag)}</h1>'
+        f'<p><a href="/tags">&larr; All tags</a></p>'
+        + (f'<ul>{"" .join(results)}</ul>' if results
+           else '<div class="notice">No pages with this tag.</div>') +
+        f'</div></div>'
+    )
+    return HTMLResponse(shell(f"Tag: {tag}", body, request=request))
+
+
+@app.post("/reorder-todos/{name:path}")
+async def reorder_todos(name: str, request: Request, _auth: None = Depends(require_auth)):
+    name = normalize_name(name)
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"ok": False, "error": "Invalid JSON"}, status_code=400)
+    order = body.get("order", [])
+    if not isinstance(order, list) or not all(isinstance(x, int) for x in order):
+        return JSONResponse({"ok": False, "error": "Bad request"}, status_code=400)
+    if len(order) > 500 or len(set(order)) != len(order):
+        return JSONResponse({"ok": False, "error": "Bad request"}, status_code=400)
+    try:
+        src = read_page(name)
+    except ValueError:
+        return JSONResponse({"ok": False, "error": "Invalid page name"}, status_code=400)
+    if src is None:
+        return JSONResponse({"ok": True}, status_code=200)
+    lines = src.splitlines(keepends=True)
+    todo_re = re.compile(r"^\s*\[[ x~]\] ")
+    for ln in order:
+        if ln < 0 or ln >= len(lines) or not todo_re.match(lines[ln]):
+            return JSONResponse({"ok": False, "error": "Invalid line"}, status_code=400)
+    # Map the new display order onto ascending file positions
+    sorted_positions = sorted(order)
+    old_contents = [lines[ln] for ln in order]
+    for j, pos in enumerate(sorted_positions):
+        lines[pos] = old_contents[j]
+    try:
+        write_page(name, "".join(lines), snapshot=False)
+    except OSError:
+        return JSONResponse({"ok": False, "error": "Save failed"}, status_code=500)
+    return JSONResponse({"ok": True})
 
 
 # ── startup ────────────────────────────────────────────────────────────────────
