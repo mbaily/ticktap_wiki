@@ -561,7 +561,7 @@ textarea{width:100%;font-family:monospace;font-size:.95rem;padding:.5rem;border:
 input[type=checkbox]{cursor:pointer;width:1.1em;height:1.1em;vertical-align:middle;-webkit-appearance:none;appearance:none;border:2px solid #e74c3c;border-radius:3px;background:#fff;position:relative;top:-.2em}
 input[type=checkbox]:checked{background:#e74c3c;border-color:#e74c3c}
 input[type=checkbox]:checked::after{content:'';position:absolute;left:25%;top:5%;width:35%;height:60%;border:solid #fff;border-width:0 2px 2px 0;transform:rotate(45deg)}
-.todo-done{color:#999}
+.todo-done{color:#aaa}
 .todo-inprogress{font-style:italic}
 .search-result{margin:.6rem 0;padding:.5rem;border:1px solid #ddd;border-radius:3px;background:#fff}
 .search-result a{font-weight:bold}
@@ -633,7 +633,7 @@ mark{background:#5a4a00;color:#ffd}
 .search-page-result{background:#16213e;border-color:#2a3f6f}
 .search-hit{color:#8ab4f8;border-left-color:#2a3f6f}
 .pin-bar{background:#0e1f33}
-.todo-done{color:#778}
+.todo-done{color:#889}
 input[type=checkbox]{background:#1a1a2e;border-color:#e74c3c}
 input[type=checkbox]:checked{background:#e74c3c;border-color:#e74c3c}
 input[type=checkbox]:checked::after{border-color:#fff}
