@@ -923,8 +923,8 @@ async def edit_section_post(name: str, idx: int, content: str = Form(""), _auth:
     sections = [s if s.endswith("\n") else s + "\n" for s in sections[:-1]] + [sections[-1]]
     try:
         write_page(name, "".join(sections))
-    except OSError as e:
-        return HTMLResponse(f"Save failed: {html.escape(str(e))}", 500)
+    except OSError:
+        return HTMLResponse("Save failed", 500)
     return RedirectResponse(f"/wiki/{name}", status_code=303)
 
 
@@ -975,8 +975,8 @@ async def edit_post(name: str, content: str = Form(""), _auth: None = Depends(re
         write_page(name, content)
     except ValueError:
         return HTMLResponse("Invalid page name", 400)
-    except OSError as e:
-        return HTMLResponse(f"Save failed: {html.escape(str(e))}", 500)
+    except OSError:
+        return HTMLResponse("Save failed", 500)
     return RedirectResponse(f"/wiki/{name}", status_code=303)
 
 
@@ -1594,8 +1594,8 @@ async def restore_snapshot(name: str, snap: str = Form(""), _auth: None = Depend
     content = snap_file.read_text(encoding="utf-8")
     try:
         write_page(name, content)
-    except (ValueError, OSError) as e:
-        return HTMLResponse(f"Restore failed: {html.escape(str(e))}", 500)
+    except (ValueError, OSError):
+        return HTMLResponse("Restore failed", 500)
     return RedirectResponse(f"/wiki/{name}", status_code=303)
 
 
