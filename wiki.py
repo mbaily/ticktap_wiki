@@ -68,9 +68,12 @@ def write_page(name: str, content: str, snapshot: bool = True):
             _prune_attic(name)
         except Exception:
             pass  # versioning failure never blocks a save
-    tmp = p.with_suffix(".tmp")
-    tmp.write_text(content, encoding="utf-8", newline="\n")
-    tmp.replace(p)
+    tmp = p.with_suffix(f".{secrets.token_hex(4)}.tmp")
+    try:
+        tmp.write_text(content, encoding="utf-8", newline="\n")
+        tmp.replace(p)
+    finally:
+        tmp.unlink(missing_ok=True)
 
 def file_path(ns: str, filename: str) -> Path:
     """Validate and return the Path for a stored file. Raises ValueError on bad input."""
@@ -597,9 +600,12 @@ def _load_tokens() -> dict:
     return {}
 
 def _save_tokens(tokens: dict):
-    tmp = TOKEN_FILE.parent / (TOKEN_FILE.name + ".tmp")
-    tmp.write_text(json.dumps(tokens, indent=2), encoding="utf-8")
-    tmp.replace(TOKEN_FILE)
+    tmp = TOKEN_FILE.parent / f"{TOKEN_FILE.name}.{secrets.token_hex(4)}.tmp"
+    try:
+        tmp.write_text(json.dumps(tokens, indent=2), encoding="utf-8")
+        tmp.replace(TOKEN_FILE)
+    finally:
+        tmp.unlink(missing_ok=True)
 
 def _issue_token(username: str) -> str:
     token = secrets.token_hex(32)
@@ -1040,8 +1046,8 @@ async def add_todo(name: str, request: Request, _auth: None = Depends(require_au
     lines.insert(insert_at, f"[ ] {text}\n")
     try:
         write_page(name, "".join(lines))
-    except OSError as e:
-        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+    except OSError:
+        return JSONResponse({"ok": False, "error": "Save failed"}, status_code=500)
     return JSONResponse({"ok": True, "line": insert_at})
 
 
