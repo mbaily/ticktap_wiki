@@ -607,7 +607,7 @@ mark{background:#fff3cd;padding:0 .1rem;border-radius:2px}
 .pin-bar{background:#243447;padding:.3rem 1rem;display:flex;gap:.5rem;flex-wrap:wrap;align-items:center;font-size:.85rem}
 .pin-bar a{color:#8ab4f8;text-decoration:none;background:rgba(255,255,255,.08);padding:.15rem .5rem;border-radius:3px}.pin-bar a:hover{text-decoration:underline}
 p.todo[draggable]{cursor:grab}p.todo.drag-over-before{border-top:2px solid #3498db}p.todo.drag-over-after{border-bottom:2px solid #3498db}
-.line-del{font-size:.7rem;color:#c0392b;text-decoration:none;margin-left:.4rem;opacity:.3;vertical-align:middle;position:relative;top:-.2em}.line-del:hover{opacity:1}
+.line-del{font-size:.7rem;color:#c0392b;text-decoration:none;margin-left:.4rem;opacity:.3;vertical-align:middle;position:relative;top:-.2em}@media(hover:hover){.line-del:hover{opacity:1}}
 .line-del.confirm{opacity:1;font-size:.75rem;background:#c0392b;color:#fff;padding:.1rem .4rem;border-radius:3px}
 """
 
@@ -1100,7 +1100,7 @@ def view(request: Request, name: str, _auth: None = Depends(require_auth)):
         f'_qtodoIndent=parseInt(el.dataset.indent||"0",10);'
         f'_qtodoPrefix=el.dataset.prefix||"[ ] ";'
         f'el.classList.add("qtodo-sel");'
-        f'var p=el.innerText.replace(/^\\s*\\[.\\]\\s*/,"").replace(/\\s+/g," ").trim();'
+        f'var p=el.cloneNode(true);var _ds=p.querySelectorAll(".line-del");_ds.forEach(function(d){{d.remove();}});p=p.innerText.replace(/^\\s*\\[.\\]\\s*/,"").replace(/\\s+/g," ").trim();'
         f'if(p.length>50)p=p.slice(0,50)+"\u2026";'
         f'document.getElementById("qtodo-preview").textContent=p;'
         f'document.getElementById("qtodo-bar").style.display="flex";'
