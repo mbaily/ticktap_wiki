@@ -2009,7 +2009,7 @@ def orphans(request: Request, _auth: None = Depends(require_auth)):
 _SNAP_RE = re.compile(r"^\d{8}_\d{6}(_\d{6})?$")
 
 @app.get("/history/{name:path}", response_class=HTMLResponse)
-def history(request: Request, name: str, snap: str = "", _auth: None = Depends(require_auth)):
+def history(request: Request, name: str, snap: str = "", view: str = "", _auth: None = Depends(require_auth)):
     name = normalize_name(name)
     if not VERSIONING_ENABLED:
         return HTMLResponse(shell("History", '<div class="layout"><div class="content">'
@@ -2031,18 +2031,30 @@ def history(request: Request, name: str, snap: str = "", _auth: None = Depends(r
         if not snap_file.exists():
             return HTMLResponse("Snapshot not found", 404)
         src = snap_file.read_text(encoding="utf-8")
-        rendered, headings = parse(src, name, section_edit=False)
         ts_display = _snap_ts_to_display(snap)
+        name_esc = html.escape(name)
+        snap_esc = html.escape(snap)
+        show_source = (view == "source")
+        if show_source:
+            toggle_link = f'<a href="/history/{name_esc}?snap={snap_esc}">View Rendered</a>'
+            content_html = f'<pre style="white-space:pre-wrap;word-wrap:break-word;background:#f8f8f8;border:1px solid #ddd;padding:1rem;font-family:monospace;font-size:.9rem;line-height:1.5;overflow-x:auto">{html.escape(src)}</pre>'
+            toc = ""
+        else:
+            toggle_link = f'<a href="/history/{name_esc}?snap={snap_esc}&amp;view=source">View Source</a>'
+            rendered, headings = parse(src, name, section_edit=False)
+            content_html = rendered
+            toc = toc_html(headings)
         body = (f'<div class="layout"><div class="content">{breadcrumb(name)}'
                 f'<div class="toolbar" style="margin-bottom:.5rem">'
-                f'<a href="/history/{html.escape(name)}">&larr; History</a>'
+                f'<a href="/history/{name_esc}">&larr; History</a>'
+                f'{toggle_link}'
                 f'<span style="color:#888;font-size:.85rem">Snapshot: {html.escape(ts_display)}</span>'
-                f'<form method="post" action="/restore/{html.escape(name)}" style="display:inline">'
-                f'<input type="hidden" name="snap" value="{html.escape(snap)}">'
+                f'<form method="post" action="/restore/{name_esc}" style="display:inline">'
+                f'<input type="hidden" name="snap" value="{snap_esc}">'
                 f'<button type="submit">Restore this version</button>'
                 f'</form></div>'
                 f'<div class="notice">This is a historical snapshot \u2014 read-only.</div>'
-                f'{rendered}</div>{toc_html(headings)}</div>')
+                f'{content_html}</div>{toc}</div>')
         return HTMLResponse(shell(f"Snapshot {ts_display} \u2014 {name}", body, request=request))
 
     # List snapshots
