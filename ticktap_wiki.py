@@ -584,6 +584,7 @@ input[type=checkbox]:checked::after{content:'';position:absolute;left:25%;top:5%
   .layout{flex-direction:column;padding:0 .5rem}
   .toc{width:100%;position:static;order:-1}
   .toc ul{display:none}
+  .toc h3 button{transform:scale(2,1.5);transform-origin:center;margin-right:.5rem}
   .toolbar{flex-wrap:wrap;gap:.4rem}
   .content{padding:.7rem}
   .login-box{margin:1rem auto;padding:1.2rem}
