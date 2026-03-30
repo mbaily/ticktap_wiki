@@ -584,7 +584,7 @@ input[type=checkbox]{cursor:pointer;width:1.1em;height:1.1em;vertical-align:midd
   .content{padding:.7rem}
   .login-box{margin:1rem auto;padding:1.2rem}
 }
-.tag-pill{display:inline-block;background:#e8f4f8;color:#2c3e50;border-radius:10px;padding:.1rem .5rem;font-size:.8rem;text-decoration:none;margin:.1rem .1rem}
+.tag-pill{display:inline-block;background:#e8f4f8;color:#2c3e50;border-radius:10px;padding:.1rem .5rem;font-size:.8rem;text-decoration:none;margin:.1rem .1rem;vertical-align:middle}
 .tag-pill:hover{background:#d0e8f0}
 mark{background:#fff3cd;padding:0 .1rem;border-radius:2px}
 .search-page-result{margin:.8rem 0;padding:.6rem;border:1px solid #ddd;border-radius:3px;background:#fff}
