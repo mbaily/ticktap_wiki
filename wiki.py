@@ -33,6 +33,8 @@ VERSION_BASE_SECS  = 30            # T — base unit for e^i × T retention form
 VERSION_SLOTS      = 10            # K — number of retention bands
 DISPLAY_TIMEZONE   = "Australia/Melbourne"         # IANA timezone for history timestamps, e.g. "Europe/London", "America/New_York"
 
+LINEBREAK_ON_NEWLINE = True        # set True to render a single newline as <br> (like GitHub MD); False = DokuWiki default (lines merge into paragraph)
+
 app = FastAPI()
 
 # ── storage helpers ────────────────────────────────────────────────────────────
@@ -327,7 +329,8 @@ def parse(src: str, name: str = "", section_edit: bool = True) -> tuple[str, lis
         if not para_lines:
             return
         last_idx = para_lines[-1][0]
-        content = " ".join(h for _, h in para_lines)
+        sep = "<br>" if LINEBREAK_ON_NEWLINE else " "
+        content = sep.join(h for _, h in para_lines)
         out.append(f'<p data-line="{last_idx}">{content}</p>')
         para_lines.clear()
 
