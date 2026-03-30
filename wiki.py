@@ -275,16 +275,26 @@ def _parse_table_row(line: str) -> list | None:
     stripped = line.strip()
     if not stripped or stripped[0] not in '|^':
         return None
+    # Stash [[links|with labels]] and {{media|with alt}} so that | or ^ inside
+    # them is not mistaken for a cell delimiter.
+    stash: list[str] = []
+    def _stash(m: re.Match) -> str:
+        stash.append(m.group(0))
+        return f"\x00{len(stash)-1}\x00"
+    safe = re.sub(r"\{\{.+?\}\}|\[\[.+?\]\]", _stash, stripped)
     cells: list = []
-    i, current_delim = 1, stripped[0]
-    while i <= len(stripped):
+    i, current_delim = 1, safe[0]
+    while i <= len(safe):
         j = i
-        while j < len(stripped) and stripped[j] not in '|^':
+        while j < len(safe) and safe[j] not in '|^':
             j += 1
-        if j >= len(stripped):
+        if j >= len(safe):
             break
-        cells.append(['th' if current_delim == '^' else 'td', stripped[i:j].strip(), 1])
-        current_delim, i = stripped[j], j + 1
+        raw = safe[i:j]
+        # Restore stashed tokens inside the cell content
+        content = re.sub(r"\x00(\d+)\x00", lambda m: stash[int(m.group(1))], raw)
+        cells.append(['th' if current_delim == '^' else 'td', content.strip(), 1])
+        current_delim, i = safe[j], j + 1
     merged: list = []
     for cell in cells:
         if cell[1] == '' and merged:
