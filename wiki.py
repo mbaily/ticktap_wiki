@@ -270,6 +270,30 @@ def parse_inline(text: str, cur_ns: str = "") -> str:
     return re.sub(r"\x00(\d+)\x00", restore, text)
 
 
+def _parse_table_row(line: str) -> list | None:
+    """Parse a DokuWiki table row into [[cell_type, content, colspan], ...] or None."""
+    stripped = line.strip()
+    if not stripped or stripped[0] not in '|^':
+        return None
+    cells: list = []
+    i, current_delim = 1, stripped[0]
+    while i <= len(stripped):
+        j = i
+        while j < len(stripped) and stripped[j] not in '|^':
+            j += 1
+        if j >= len(stripped):
+            break
+        cells.append(['th' if current_delim == '^' else 'td', stripped[i:j].strip(), 1])
+        current_delim, i = stripped[j], j + 1
+    merged: list = []
+    for cell in cells:
+        if cell[1] == '' and merged:
+            merged[-1][2] += 1
+        else:
+            merged.append(cell)
+    return merged or None
+
+
 def parse(src: str, name: str = "", section_edit: bool = True) -> tuple[str, list]:
     src, meta_offset = strip_meta(src)
     lines = src.split("\n")
@@ -278,15 +302,30 @@ def parse(src: str, name: str = "", section_edit: bool = True) -> tuple[str, lis
     in_code, code_lang, code_lines = False, "", []
     h2_count = 0
     seen_anchors: dict[str, int] = {}
+    table_rows: list = []
 
     def close_lists():
         while list_stack:
             out.append(f"</{list_stack.pop()[1]}>")
 
+    def close_table():
+        if not table_rows:
+            return
+        out.append('<table class="wiki-table">')
+        for row in table_rows:
+            out.append('<tr>')
+            for cell_type, content, colspan in row:
+                cs = f' colspan="{colspan}"' if colspan > 1 else ''
+                out.append(f'<{cell_type}{cs}>{parse_inline(content, cur_ns)}</{cell_type}>')
+            out.append('</tr>')
+        out.append('</table>')
+        table_rows.clear()
+
     for i, line in enumerate(lines):
         # fenced code blocks
         if line.startswith("```"):
             if not in_code:
+                close_table()
                 close_lists()
                 code_lang, in_code, code_lines = line[3:].strip(), True, []
             else:
@@ -300,11 +339,12 @@ def parse(src: str, name: str = "", section_edit: bool = True) -> tuple[str, lis
 
         # horizontal rule
         if re.fullmatch(r"-{4,}", line.strip()):
-            close_lists(); out.append("<hr>"); continue
+            close_table(); close_lists(); out.append("<hr>"); continue
 
         # headings — DokuWiki style: more = means bigger (6= → h1, 2= → h5)
         hm = re.fullmatch(r"(={2,6}) (.+?) \1", line.rstrip())
         if hm:
+            close_table()
             close_lists()
             level, text = 7 - len(hm.group(1)), hm.group(2)
             base_anchor = slug(text)
@@ -325,15 +365,24 @@ def parse(src: str, name: str = "", section_edit: bool = True) -> tuple[str, lis
         # todo checkboxes
         cbm = re.match(r"^(\s*)\[([ x~])\] (.*)", line)
         if cbm:
+            close_table()
             close_lists()
             state, text = cbm.group(2), parse_inline(cbm.group(3), cur_ns)
             checked = " checked" if state == "x" else ""
             out.append(f'<p class="todo" data-line="{i + meta_offset}"><input type="checkbox"{checked} data-line="{i + meta_offset}" data-name="{html.escape(name)}"> {text}</p>')
             continue
 
+        # table rows — DokuWiki syntax: lines starting with | or ^
+        trow = _parse_table_row(line)
+        if trow is not None:
+            close_lists()
+            table_rows.append(trow)
+            continue
+
         # lists — DokuWiki requires minimum 2-space indent; 2 spaces = top-level
         lm = re.match(r"^( {2,})([*\-]) (.+)", line)
         if lm:
+            close_table()
             indent = max(0, len(lm.group(1)) // 2 - 1)
             tag = "ul" if lm.group(2) == "*" else "ol"
             text = parse_inline(lm.group(3), cur_ns)
@@ -346,12 +395,14 @@ def parse(src: str, name: str = "", section_edit: bool = True) -> tuple[str, lis
             out.append(f'<li data-line="{i + meta_offset}">{text}</li>')
             continue
 
+        close_table()
         close_lists()
         if line.strip() == "":
             out.append("")
         else:
             out.append(f'<p data-line="{i + meta_offset}">{parse_inline(line, cur_ns)}</p>')
 
+    close_table()
     close_lists()
     # emit any unclosed fenced code block at EOF
     if in_code:
@@ -400,6 +451,10 @@ h2{border-bottom:1px solid #ddd;padding-bottom:.2rem;display:flex;justify-conten
 p{margin:.4rem 0}pre{background:#f4f4f4;padding:.8rem;border-radius:4px;overflow-x:auto;margin:.5rem 0}
 code{background:#f0f0f0;padding:0 .3rem;border-radius:3px;font-size:.9em}pre code{background:none;padding:0}
 hr{border:none;border-top:1px solid #ddd;margin:1rem 0}
+.wiki-table{border-collapse:collapse;margin:.8rem 0;width:auto;max-width:100%}
+.wiki-table td,.wiki-table th{border:1px solid #ddd;padding:.4rem .6rem;text-align:left;vertical-align:top}
+.wiki-table th{background:#ecf0f1;font-weight:bold}
+.wiki-table tr:nth-child(even) td{background:#f9f9f9}
 a.new-page{color:#c0392b;text-decoration:underline dashed}
 .sect-edit{font-size:.75rem;color:#888;border:1px solid #ccc;padding:.1rem .3rem;border-radius:3px;text-decoration:none;margin-left:.5rem}
 textarea{width:100%;font-family:monospace;font-size:.95rem;padding:.5rem;border:1px solid #ccc;border-radius:4px}
@@ -461,6 +516,9 @@ a.new-page{color:#f87171}
 .login-box input[type=text],.login-box input[type=password]{-webkit-appearance:none;background:#1a1a2e;color:#cdd;border-color:#2a3f6f}
 .login-box button{background:#0f3460}
 .login-error{background:#3a0000;border-color:#c0392b}
+.wiki-table td,.wiki-table th{border-color:#2a3f6f}
+.wiki-table th{background:#1e2a45}
+.wiki-table tr:nth-child(even) td{background:#14192e}
 """
 
 JS = """
