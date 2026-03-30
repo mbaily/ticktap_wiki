@@ -443,7 +443,7 @@ def parse(src: str, name: str = "", section_edit: bool = True) -> tuple[str, lis
             checked = " checked" if state == "x" else ""
             state_cls = " todo-done" if state == "x" else (" todo-inprogress" if state == "~" else "")
             indent_style = f' style="padding-left:{todo_level * 1.5}em"' if todo_level else ''
-            del_btn = f' <a class="line-del" href="#" data-line="{i + meta_offset}" data-name="{html.escape(name)}">\u274c</a>' if section_edit and name else ''
+            del_btn = f' <a class="line-del" href="#" data-line="{i + meta_offset}" data-name="{html.escape(name)}">\u274c</a>' if INLINE_DELETE and section_edit and name else ''
             out.append(f'<p class="todo{state_cls}" draggable="true" data-line="{i + meta_offset}" data-state="{state}" data-indent="{todo_indent}" data-prefix="[ ] "{indent_style}><input type="checkbox"{checked} data-line="{i + meta_offset}" data-name="{html.escape(name)}"> {text}{del_btn}</p>')
             continue
 
@@ -489,7 +489,7 @@ def parse(src: str, name: str = "", section_edit: bool = True) -> tuple[str, lis
                 out.append(f"<{tag}>")
             li_indent = len(lm.group(1))
             li_prefix = lm.group(2) + " "
-            del_btn = f' <a class="line-del" href="#" data-line="{i + meta_offset}" data-name="{html.escape(name)}">\u274c</a>' if section_edit and name else ''
+            del_btn = f' <a class="line-del" href="#" data-line="{i + meta_offset}" data-name="{html.escape(name)}">\u274c</a>' if INLINE_DELETE and section_edit and name else ''
             out.append(f'<li data-line="{i + meta_offset}" data-indent="{li_indent}" data-prefix="{li_prefix}">{text}{del_btn}</li>')
             continue
 
