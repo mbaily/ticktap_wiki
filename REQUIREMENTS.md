@@ -67,7 +67,10 @@ DokuWiki convention: **more equals signs = bigger heading**.
 ```
 
 - May appear standalone or inside a list item.
-- Clicking the checkbox in the rendered view toggles its state and persists it immediately (no full-page save).
+- Clicking the checkbox cycles or toggles state and persists it immediately (no full-page save).
+- Behaviour is controlled by `TODO_CYCLE_3STATE` (default `True`):
+  - `True`: cycles `[ ] → [x] → [~] → [ ]`.
+  - `False`: simple toggle `[ ] ↔ [x]` (no in-progress state).
 
 ### 3.5 Inline Formatting
 

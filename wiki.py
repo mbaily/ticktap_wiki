@@ -35,6 +35,8 @@ DISPLAY_TIMEZONE   = "Australia/Melbourne"         # IANA timezone for history t
 
 LINEBREAK_ON_NEWLINE = True        # set True to render a single newline as <br> (like GitHub MD); False = DokuWiki default (lines merge into paragraph)
 
+TODO_CYCLE_3STATE = False           # True = cycle [ ]→[x]→[~]→[ ]; False = toggle [ ]↔[x] only (no in-progress state)
+
 app = FastAPI()
 
 # ── storage helpers ────────────────────────────────────────────────────────────
@@ -540,9 +542,7 @@ textarea{width:100%;font-family:monospace;font-size:.95rem;padding:.5rem;border:
 .notice{background:#ffeeba;border:1px solid #ffc107;padding:.8rem 1rem;border-radius:4px;margin:1rem 0}
 .breadcrumb{font-size:.85rem;color:#666;margin-bottom:.5rem}.breadcrumb a{color:#2c3e50}
 input[type=checkbox]{cursor:pointer;width:1.1em;height:1.1em;vertical-align:middle}
-.todo-done{opacity:.6}.todo-done input[type=checkbox]{accent-color:#27ae60}
-.todo-inprogress input[type=checkbox]{accent-color:#e67e22}
-.todo-inprogress>input[type=checkbox]::after{content:"~"}
+.todo-done{opacity:.6}
 .search-result{margin:.6rem 0;padding:.5rem;border:1px solid #ddd;border-radius:3px;background:#fff}
 .search-result a{font-weight:bold}
 .snippet{font-size:.85rem;color:#555;font-family:monospace}
@@ -1278,8 +1278,8 @@ async def toggle(request: Request, name: str, line: int, _auth: None = Depends(r
         return HTMLResponse("Out of range", 400)
     ln = lines[line].rstrip("\r\n")
     # Target only the leading checkbox marker to avoid matching [x] inside the text
-    # Cycle: [ ] → [x] → [~] → [ ]
-    _cycle = {" ": "x", "x": "~", "~": " "}
+    # Cycle: [ ] → [x] → [~] → [ ] when TODO_CYCLE_3STATE, else toggle [ ] ↔ [x]
+    _cycle = {" ": "x", "x": "~", "~": " "} if TODO_CYCLE_3STATE else {" ": "x", "x": " ", "~": " "}
     new_ln = re.sub(r"^(\s*)\[([ x~])\]",
                     lambda m: m.group(1) + "[" + _cycle[m.group(2)] + "]",
                     ln)
