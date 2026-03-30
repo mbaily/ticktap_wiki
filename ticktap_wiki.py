@@ -1,4 +1,4 @@
-import os, re, html, time, secrets, json, math, shutil
+import os, re, html, time, secrets, json, math, shutil, hashlib
 from urllib.parse import quote
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
@@ -750,6 +750,29 @@ document.addEventListener('click',function(e){
 });
 """
 
+# ── static asset hashing (computed once at startup) ─────────────────────────────
+_CSS_FINAL = CSS.replace('__ITEM_SP__', ITEM_SPACING) + (CSS_DARK if DARK_MODE else "")
+_CSS_HASH  = hashlib.sha256(_CSS_FINAL.encode()).hexdigest()[:12]
+_JS_HASH   = hashlib.sha256(JS.encode()).hexdigest()[:12]
+CSS_URL    = f"/static/style-{_CSS_HASH}.css"
+JS_URL     = f"/static/app-{_JS_HASH}.js"
+
+@app.get("/static/style-{h}.css")
+def serve_css(h: str):
+    from fastapi.responses import Response
+    if h != _CSS_HASH:
+        return Response(status_code=404)
+    return Response(content=_CSS_FINAL, media_type="text/css",
+                    headers={"Cache-Control": "public, max-age=31536000, immutable"})
+
+@app.get("/static/app-{h}.js")
+def serve_js(h: str):
+    from fastapi.responses import Response
+    if h != _JS_HASH:
+        return Response(status_code=404)
+    return Response(content=JS, media_type="application/javascript",
+                    headers={"Cache-Control": "public, max-age=31536000, immutable"})
+
 # ── HTML helpers ───────────────────────────────────────────────────────────────
 
 def nav_bar(search_q: str = "", username: str = "") -> str:
@@ -813,14 +836,12 @@ def shell(title: str, body: str, search_q: str = "", request: Request | None = N
         username = getattr(request.state, "username", None)
         if username is None:
             username = _validate_token(_get_token(request)) or ""
-    dark = f'<style>{CSS_DARK}</style>' if DARK_MODE else ""
-    css = CSS.replace('__ITEM_SP__', ITEM_SPACING)
     return (f'<!doctype html><html lang="en"><head><meta charset="utf-8">'
             f'<meta name="viewport" content="width=device-width,initial-scale=1">'
             f'<title>{html.escape(title)} \u2014 {html.escape(SITE_TITLE)}</title>'
-            f'<style>{css}</style>{dark}</head><body>'
+            f'<link rel="stylesheet" href="{CSS_URL}"></head><body>'
             f'{nav_bar(search_q, username)}{pins_bar(request)}{body}'
-            f'<script>{JS}</script></body></html>')
+            f'<script src="{JS_URL}"></script></body></html>')
 
 def breadcrumb(name: str) -> str:
     parts = name.split("/")
