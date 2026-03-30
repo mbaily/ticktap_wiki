@@ -37,9 +37,28 @@ These can be combined on the same line but cannot span multiple lines.
 
 ---
 
+## Paragraphs and Line Breaks
+
+**Blank line → new paragraph** (always):
+```
+First paragraph.
+
+Second paragraph.
+```
+
+**Single newline behaviour** — controlled by `LINEBREAK_ON_NEWLINE` in the config section of `wiki.py`:
+
+| Setting | Effect |
+|---------|--------|
+| `LINEBREAK_ON_NEWLINE = True` *(default)* | Each newline renders as `<br>` — lines stay visually separate |
+| `LINEBREAK_ON_NEWLINE = False` | DokuWiki default — consecutive lines within a blank-line block are merged into one `<p>` with word-wrap |
+
+---
+
 ## Lists
 
-Lists require **at least 2 spaces** of indent. Each extra 2 spaces adds one nesting level (max 3).
+Lists require **at least 2 spaces** of indent. Each extra 2 spaces adds one nesting level.
+Use `*` for unordered (bullet) lists and `-` for ordered (numbered) lists.
 
 **Unordered (bullet):**
 ```
@@ -56,7 +75,18 @@ Lists require **at least 2 spaces** of indent. Each extra 2 spaces adds one nest
     - Nested item
 ```
 
-Use `*` for bullet lists and `-` for numbered lists. The two types can be mixed at different indent levels.
+**Mixed nesting** (different types at different levels):
+```
+  * Bullet top-level
+    - Numbered sub-list
+    - Another numbered
+  * Back to bullets
+```
+
+Rendering rules:
+- Sub-lists are nested **inside** their parent `<li>`, producing correct indented HTML.
+- A blank line between list items ends the list — start a fresh list below it.
+- **Quick-add**: clicking any list item in the reader view opens the quick-add bar at the bottom of the screen. Press **Enter** or click ✚ Add to insert a new sibling item at the same indent level. The new item is saved immediately.
 
 ---
 
@@ -68,8 +98,47 @@ Use `*` for bullet lists and `-` for numbered lists. The two types can be mixed 
 [~] In progress
 ```
 
-- Clicking a checkbox in the browser **immediately saves** the new state — no page reload required.
-- Checkboxes can appear on their own line or inside a list item.
+**Indented / nested todos** — prefix with spaces in multiples of 2:
+```
+[ ] Top-level task
+  [ ] Sub-task (2 spaces)
+    [ ] Deeper sub-task (4 spaces)
+      [x] Completed deep task (6 spaces)
+```
+
+Each 2-space indent adds 1.5 em of visual left-padding in the rendered view.
+
+- **Checkbox toggle**: clicking a checkbox in the browser **immediately saves** the new state (no page reload).
+- **Quick-add**: clicking any todo item opens the quick-add bar at the bottom of the screen. The new item is inserted as a **sibling at the same indent level**. Press **Enter** or click ✚ Add.
+- The state marker (`[ ]`, `[x]`, `[~]`) only affects the checkbox appearance; quick-add always inserts a new `[ ]` item.
+
+---
+
+## Tables
+
+Tables use DokuWiki syntax: `^` for header cells, `|` for data cells. Every row must start and end with a delimiter.
+
+**Basic table:**
+```
+^ Heading 1      ^ Heading 2       ^ Heading 3   ^
+| Row 1 Col 1    | Row 1 Col 2     | Row 1 Col 3 |
+| Row 2 Col 1    | Row 2 Col 2     | Row 2 Col 3 |
+```
+
+**Column span** — place consecutive empty cells using `||` (double pipe):
+```
+^ Heading 1      ^ Heading 2 (spans 2 cols)       ^^
+| Row 1 Col 1    | Row 1 Col 2     | Row 1 Col 3  |
+| Row 2 Col 1    | some colspan (double pipe)     ||
+| Row 3 Col 1    | Row 3 Col 2     | Row 3 Col 3  |
+```
+
+Rules:
+- A cell whose content is blank and immediately follows another cell is merged left (colspan).
+- Inline markup (**bold**, //italic//, links, images) works inside cells.
+- Links with labels `[[Page|label]]` are handled correctly — the `|` in the label is never mistaken for a cell boundary.
+- Mixed header (`^`) and data (`|`) rows are allowed anywhere in the table.
+- Consecutive table rows form a single table; a blank line or any other block element ends the table.
 
 ---
 
@@ -87,7 +156,7 @@ Use `*` for bullet lists and `-` for numbered lists. The two types can be mixed 
 
 - A bare `[[PageName]]` (no `:`) is resolved relative to the **current page's namespace**.
 - A leading `:` forces resolution from the **root namespace**.
-- If the target page does not exist, the link is styled with a dashed underline and clicking it opens the editor for that page.
+- If the target page does not exist, the link is styled with a dashed underline; clicking it opens the editor for that page.
 
 ### External links
 
@@ -125,7 +194,7 @@ Renders as a 📄 download anchor. If the file does not exist the link is replac
 
 ## Code Blocks
 
-Use a triple-backtick fence. The language name is optional; when supplied it activates highlight.js syntax colouring.
+Use a triple-backtick fence. The language name is optional; when supplied it activates syntax highlighting.
 
 ````
 ```python
@@ -194,14 +263,16 @@ The server maps between the two automatically.
     * nested            - nested
 
 [ ] todo   [x] done   [~] in progress
+  [ ] nested todo (2 spaces indent)
+    [ ] deeper todo (4 spaces indent)
+
+^ Header 1  ^ Header 2  ^        (table header row)
+| Cell 1    | Cell 2    |        (table data row)
+| Spanning  ||                   (colspan — double pipe)
 
 [[Page]]   [[ns:Page|Label]]   [[https://…|Label]]
 [[file:doc.pdf|label]]
 {{image.png|alt text}}
 
-```python
-code block
-```
-
-----   (horizontal rule)
+----     (horizontal rule)
 ```
