@@ -10,7 +10,7 @@ Most wikis are designed for desktops and long-form documentation. TickTap is bui
 
 - **Tap a checkbox** to toggle a task done — no edit mode, no save button
 - **Quick-add tasks** from a floating button — type and hit Enter
-- **Drag to reorder** your todo list with touch or mouse
+- **Drag to reorder** your todo list with mouse (desktop only)
 - **Daily journal pages** — tap "Today" to jump straight to your current task list
 - **Works on any phone browser** — responsive layout, big tap targets, no app install needed
 
