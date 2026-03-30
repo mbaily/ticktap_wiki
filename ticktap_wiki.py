@@ -839,6 +839,7 @@ def shell(title: str, body: str, search_q: str = "", request: Request | None = N
     return (f'<!doctype html><html lang="en"><head><meta charset="utf-8">'
             f'<meta name="viewport" content="width=device-width,initial-scale=1">'
             f'<title>{html.escape(title)} \u2014 {html.escape(SITE_TITLE)}</title>'
+            f'<link rel="icon" href="/favicon.ico">'
             f'<link rel="stylesheet" href="{CSS_URL}"></head><body>'
             f'{nav_bar(search_q, username)}{pins_bar(request)}{body}'
             f'<script src="{JS_URL}"></script></body></html>')
@@ -1107,7 +1108,7 @@ _FAVICON = bytes([
 def favicon():
     from fastapi.responses import Response
     return Response(content=_FAVICON, media_type="image/x-icon",
-                    headers={"Cache-Control": "public, max-age=86400"})
+                    headers={"Cache-Control": "public, max-age=31536000, immutable"})
 
 @app.get("/")
 def root(): return RedirectResponse("/wiki/Home")
@@ -1684,6 +1685,7 @@ def _login_page(next_url: str, error: str = "") -> HTMLResponse:
     return HTMLResponse(f'<!doctype html><html lang="en"><head><meta charset="utf-8">'
                         f'<meta name="viewport" content="width=device-width,initial-scale=1">'
                         f'<title>Login \u2014 {html.escape(SITE_TITLE)}</title>'
+                        f'<link rel="icon" href="/favicon.ico">'
                         f'<link rel="stylesheet" href="{CSS_URL}"></head>'
                         f'<body>{body}</body></html>')
 
