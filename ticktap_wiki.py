@@ -1,4 +1,4 @@
-import os, re, html, time, secrets, json, math, shutil, hashlib
+import os, re, html, time, secrets, json, math, shutil, hashlib, base64
 from urllib.parse import quote
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
@@ -751,11 +751,27 @@ document.addEventListener('click',function(e){
 """
 
 # ── static asset hashing (computed once at startup) ─────────────────────────────
-_CSS_FINAL = CSS.replace('__ITEM_SP__', ITEM_SPACING) + (CSS_DARK if DARK_MODE else "")
-_CSS_HASH  = hashlib.sha256(_CSS_FINAL.encode()).hexdigest()[:12]
-_JS_HASH   = hashlib.sha256(JS.encode()).hexdigest()[:12]
-CSS_URL    = f"/static/style-{_CSS_HASH}.css"
-JS_URL     = f"/static/app-{_JS_HASH}.js"
+# Minimal 1×1 ICO — BGRA pixel #2c3e50 (matches nav colour)
+_FAVICON = bytes([
+    0,0,1,0,1,0,                    # ICONDIR (reserved, type=1, count=1)
+    1,1,0,0,1,0,32,0,48,0,0,0,     # ICONDIRENTRY (w,h,clrs,res,planes,bpp,size=48)
+    22,0,0,0,                       # ICONDIRENTRY image offset (6+16=22)
+    40,0,0,0,                       # BITMAPINFOHEADER size
+    1,0,0,0,2,0,0,0,                # width=1, height=2 (ICO doubles for XOR+AND)
+    1,0,32,0,                       # planes=1, bpp=32
+    0,0,0,0,0,0,0,0,                # compression=BI_RGB, imageSize=0
+    0,0,0,0,0,0,0,0,                # XPelsPerMeter, YPelsPerMeter
+    0,0,0,0,0,0,0,0,                # clrUsed, clrImportant
+    80,62,44,255,                   # pixel BGRA: #2c3e50 fully opaque
+    0,0,0,0,                        # AND mask row (1px, DWORD-aligned)
+])
+_CSS_FINAL  = CSS.replace('__ITEM_SP__', ITEM_SPACING) + (CSS_DARK if DARK_MODE else "")
+_CSS_HASH   = hashlib.sha256(_CSS_FINAL.encode()).hexdigest()[:12]
+_JS_HASH    = hashlib.sha256(JS.encode()).hexdigest()[:12]
+_ICON_ETAG  = '"' + hashlib.sha256(_FAVICON).hexdigest()[:12] + '"'
+_ICON_DATA  = "data:image/x-icon;base64," + base64.b64encode(_FAVICON).decode()
+CSS_URL     = f"/static/style-{_CSS_HASH}.css"
+JS_URL      = f"/static/app-{_JS_HASH}.js"
 
 @app.get("/static/style-{h}.css")
 def serve_css(h: str):
@@ -839,7 +855,7 @@ def shell(title: str, body: str, search_q: str = "", request: Request | None = N
     return (f'<!doctype html><html lang="en"><head><meta charset="utf-8">'
             f'<meta name="viewport" content="width=device-width,initial-scale=1">'
             f'<title>{html.escape(title)} \u2014 {html.escape(SITE_TITLE)}</title>'
-            f'<link rel="icon" href="/favicon.ico">'
+            f'<link rel="icon" href="{_ICON_DATA}">'
             f'<link rel="stylesheet" href="{CSS_URL}"></head><body>'
             f'{nav_bar(search_q, username)}{pins_bar(request)}{body}'
             f'<script src="{JS_URL}"></script></body></html>')
@@ -1089,26 +1105,15 @@ async def _login_redirect_handler(request: Request, exc: _LoginRedirect):
 
 # ── routes ─────────────────────────────────────────────────────────────────────
 
-# Minimal 1×1 ICO — BGRA pixel #2c3e50 (matches nav colour)
-_FAVICON = bytes([
-    0,0,1,0,1,0,                    # ICONDIR (reserved, type=1, count=1)
-    1,1,0,0,1,0,32,0,48,0,0,0,     # ICONDIRENTRY (w,h,clrs,res,planes,bpp,size=48)
-    22,0,0,0,                       # ICONDIRENTRY image offset (6+16=22)
-    40,0,0,0,                       # BITMAPINFOHEADER size
-    1,0,0,0,2,0,0,0,                # width=1, height=2 (ICO doubles for XOR+AND)
-    1,0,32,0,                       # planes=1, bpp=32
-    0,0,0,0,0,0,0,0,                # compression=BI_RGB, imageSize=0
-    0,0,0,0,0,0,0,0,                # XPelsPerMeter, YPelsPerMeter
-    0,0,0,0,0,0,0,0,                # clrUsed, clrImportant
-    80,62,44,255,                   # pixel BGRA: #2c3e50 fully opaque
-    0,0,0,0,                        # AND mask row (1px, DWORD-aligned)
-])
-
 @app.get("/favicon.ico")
-def favicon():
+def favicon(request: Request):
     from fastapi.responses import Response
+    if request.headers.get("if-none-match") == _ICON_ETAG:
+        return Response(status_code=304, headers={"ETag": _ICON_ETAG,
+                        "Cache-Control": "public, max-age=31536000, immutable"})
     return Response(content=_FAVICON, media_type="image/x-icon",
-                    headers={"Cache-Control": "public, max-age=31536000, immutable"})
+                    headers={"Cache-Control": "public, max-age=31536000, immutable",
+                             "ETag": _ICON_ETAG})
 
 @app.get("/")
 def root(): return RedirectResponse("/wiki/Home")
@@ -1685,7 +1690,7 @@ def _login_page(next_url: str, error: str = "") -> HTMLResponse:
     return HTMLResponse(f'<!doctype html><html lang="en"><head><meta charset="utf-8">'
                         f'<meta name="viewport" content="width=device-width,initial-scale=1">'
                         f'<title>Login \u2014 {html.escape(SITE_TITLE)}</title>'
-                        f'<link rel="icon" href="/favicon.ico">'
+                        f'<link rel="icon" href="{_ICON_DATA}">'
                         f'<link rel="stylesheet" href="{CSS_URL}"></head>'
                         f'<body>{body}</body></html>')
 
