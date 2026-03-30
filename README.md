@@ -9,10 +9,10 @@ One Python file. No database. No JavaScript framework. Just tap and go.
 Most wikis are designed for desktops and long-form documentation. TickTap is built for the way you actually use a personal wiki on your phone:
 
 - **Tap a checkbox** to toggle a task done — no edit mode, no save button
-- **Quick-add tasks** from a floating button — type and hit Enter
+- **Quick-add tasks** click or mobile tap a todo or list item, get a floating text box — type and hit Enter. No edit mode, no save button.
 - **Drag to reorder** your todo list with mouse (desktop only)
 - **Daily journal pages** — tap "Today" to jump straight to your current task list
-- **Works on any phone browser** — responsive layout, big tap targets, no app install needed
+- **Aims to works on any phone browser** — responsive layout, big tap targets, no app install needed
 
 ## Features
 
@@ -29,7 +29,7 @@ Most wikis are designed for desktops and long-form documentation. TickTap is bui
 - **Pinned pages** — bookmark frequently used pages to the nav bar
 - **Dark mode** — easy on the eyes at night
 - **HTTPS + authentication** — bcrypt passwords, token-based login, rate limiting
-- **Zero dependencies beyond Python** — FastAPI + Uvicorn (pip install)
+- **Zero dependencies beyond Python and common Python libraries** — FastAPI + Uvicorn
 
 ## Quick Start
 
