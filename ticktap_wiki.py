@@ -2262,9 +2262,11 @@ CONFIGURATION
                              f"Create it with: python ticktap_wiki.py --adduser USERNAME")
     if HTTPS_ENABLED:
         if not Path(TLS_CERT_FILE).exists():
-            raise SystemExit(f"HTTPS_ENABLED=True but cert file not found: {TLS_CERT_FILE}")
+            raise SystemExit(f"HTTPS_ENABLED=True but cert file not found: {TLS_CERT_FILE}\n"
+                             f"Generate one with: python ticktap_wiki.py --gencert")
         if not Path(TLS_KEY_FILE).exists():
-            raise SystemExit(f"HTTPS_ENABLED=True but key file not found: {TLS_KEY_FILE}")
+            raise SystemExit(f"HTTPS_ENABLED=True but key file not found: {TLS_KEY_FILE}\n"
+                             f"Generate one with: python ticktap_wiki.py --gencert")
 
     kwargs: dict = {"host": HOST, "port": PORT, "reload": False,
                     "timeout_keep_alive": 5, "timeout_graceful_shutdown": 3}
