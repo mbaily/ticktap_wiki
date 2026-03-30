@@ -126,7 +126,7 @@ def _prune_attic(name: str):
     entries = []
     for f in sorted(d.glob("*.wiki")):
         try:
-            dt = datetime.strptime(f.stem, "%Y%m%d_%H%M%S").replace(tzinfo=timezone.utc)
+            dt = datetime.strptime(f.stem[:15], "%Y%m%d_%H%M%S").replace(tzinfo=timezone.utc)
         except ValueError:
             continue
         age = (now - dt).total_seconds()
@@ -760,6 +760,7 @@ def root(): return RedirectResponse("/wiki/Home")
 
 @app.get("/wiki/{name:path}", response_class=HTMLResponse)
 def view(request: Request, name: str, _auth: None = Depends(require_auth)):
+    name = normalize_name(name)
     try:
         src = read_page(name)
     except ValueError:
@@ -867,6 +868,7 @@ def view(request: Request, name: str, _auth: None = Depends(require_auth)):
 
 @app.get("/sect/{name:path}/{idx}", response_class=HTMLResponse)
 def edit_section_get(request: Request, name: str, idx: int, _auth: None = Depends(require_auth)):
+    name = normalize_name(name)
     if idx < 0:
         return HTMLResponse("Section not found", 400)
     try:
@@ -890,6 +892,7 @@ def edit_section_get(request: Request, name: str, idx: int, _auth: None = Depend
 
 @app.post("/sect/{name:path}/{idx}", response_class=HTMLResponse)
 async def edit_section_post(name: str, idx: int, content: str = Form(""), _auth: None = Depends(require_auth)):
+    name = normalize_name(name)
     if idx < 0:
         return HTMLResponse("Section not found", 400)
     try:
@@ -912,6 +915,7 @@ async def edit_section_post(name: str, idx: int, content: str = Form(""), _auth:
 
 @app.get("/edit/{name:path}", response_class=HTMLResponse)
 def edit_get(request: Request, name: str, _auth: None = Depends(require_auth)):
+    name = normalize_name(name)
     try:
         src = read_page(name)
     except ValueError:
@@ -951,6 +955,7 @@ def edit_get(request: Request, name: str, _auth: None = Depends(require_auth)):
 
 @app.post("/edit/{name:path}", response_class=HTMLResponse)
 async def edit_post(name: str, content: str = Form(""), _auth: None = Depends(require_auth)):
+    name = normalize_name(name)
     try:
         write_page(name, content)
     except ValueError:
@@ -968,6 +973,7 @@ async def preview(name: str = Form(""), content: str = Form(""), _auth: None = D
 
 @app.post("/toggle/{name:path}/{line}", response_class=HTMLResponse)
 async def toggle(request: Request, name: str, line: int, _auth: None = Depends(require_auth)):
+    name = normalize_name(name)
     if line < 0:
         return HTMLResponse("Out of range", 400)
     try:
@@ -998,6 +1004,7 @@ async def toggle(request: Request, name: str, line: int, _auth: None = Depends(r
 
 @app.post("/add-todo/{name:path}")
 async def add_todo(name: str, request: Request, _auth: None = Depends(require_auth)):
+    name = normalize_name(name)
     try:
         body = await request.json()
     except Exception:
@@ -1106,6 +1113,7 @@ def search(request: Request, q: str = "", _auth: None = Depends(require_auth)):
 
 @app.get("/delete/{name:path}", response_class=HTMLResponse)
 def delete_get(request: Request, name: str, _auth: None = Depends(require_auth)):
+    name = normalize_name(name)
     try:
         page_path(name)  # validate name; raises ValueError on bad input
     except ValueError:
@@ -1123,6 +1131,7 @@ def delete_get(request: Request, name: str, _auth: None = Depends(require_auth))
 
 @app.post("/delete/{name:path}", response_class=HTMLResponse)
 async def delete_post(name: str, confirm: str = Form(""), _auth: None = Depends(require_auth)):
+    name = normalize_name(name)
     if confirm != "yes":
         return RedirectResponse(f"/wiki/{name}", status_code=303)
     try:
@@ -1477,6 +1486,7 @@ _SNAP_RE = re.compile(r"^\d{8}_\d{6}(_\d{6})?$")
 
 @app.get("/history/{name:path}", response_class=HTMLResponse)
 def history(request: Request, name: str, snap: str = "", _auth: None = Depends(require_auth)):
+    name = normalize_name(name)
     if not VERSIONING_ENABLED:
         return HTMLResponse(shell("History", '<div class="layout"><div class="content">'
                                   '<div class="notice">Versioning is disabled '
@@ -1552,6 +1562,7 @@ def history(request: Request, name: str, snap: str = "", _auth: None = Depends(r
 
 @app.post("/restore/{name:path}", response_class=HTMLResponse)
 async def restore_snapshot(name: str, snap: str = Form(""), _auth: None = Depends(require_auth)):
+    name = normalize_name(name)
     if not VERSIONING_ENABLED:
         return HTMLResponse("Versioning is disabled", 400)
     if not _SNAP_RE.match(snap):
