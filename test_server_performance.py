@@ -93,7 +93,7 @@ def wiki_server():
         script_lines = [
             "import sys, pathlib, asyncio, uvicorn",
             f"sys.path.insert(0, {str(WIKI_PY.parent)!r})",
-            "import wiki as _w",
+            "import ticktap_wiki as _w",
             "_w.HTTPS_ENABLED = False",
             f"_w.HTPASSWD_FILE = pathlib.Path({str(htpasswd_file)!r})",
             f"_w.TOKEN_FILE    = pathlib.Path({str(tokens_file)!r})",

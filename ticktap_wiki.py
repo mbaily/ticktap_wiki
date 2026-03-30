@@ -1525,7 +1525,7 @@ def _login_page(next_url: str, error: str = "") -> HTMLResponse:
     err_html = f'<div class="login-error">{html.escape(error)}</div>' if error else ""
     next_safe = html.escape(next_url)
     body = (f'<div class="login-box">'
-            f'<h1>&#128274; Wiki Login</h1>'
+            f'<h1>&#128274; {html.escape(SITE_TITLE)} Login</h1>'
             f'{err_html}'
             f'<form method="post" action="/login">'
             f'<input type="hidden" name="next" value="{next_safe}">'
@@ -2107,7 +2107,7 @@ async def reorder_todos(name: str, request: Request, _auth: None = Depends(requi
 # ── startup ────────────────────────────────────────────────────────────────────
 
 WELCOME = """\
-====== Welcome to Wiki ======
+====== Welcome to TickTap Wiki ======
 
 ===== Getting Started =====
 
@@ -2299,7 +2299,7 @@ CONFIGURATION
                 s.close()
                 servers.append(uvicorn.Server(uvicorn.Config(app, **kw6)).serve())
             except OSError:
-                logging.getLogger("wiki").warning(
+                logging.getLogger("ticktap_wiki").warning(
                     "IPv6 unavailable on this system — only binding IPv4 (%s). "
                     "Use http://127.0.0.1:%d/ to avoid browser DNS fallback delay.",
                     kw.get("host"), kw.get("port"),
@@ -2307,7 +2307,7 @@ CONFIGURATION
         results = await asyncio.gather(*servers, return_exceptions=True)
         for r in results:
             if isinstance(r, Exception):
-                logging.getLogger("wiki").error("Server error: %s", r)
+                logging.getLogger("ticktap_wiki").error("Server error: %s", r)
 
     if sys.platform == "win32":
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
