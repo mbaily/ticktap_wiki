@@ -313,6 +313,7 @@ def parse(src: str, name: str = "", section_edit: bool = True) -> tuple[str, lis
     h2_count = 0
     seen_anchors: dict[str, int] = {}
     table_rows: list = []
+    para_lines: list = []  # (source_line_idx, rendered_html) — current paragraph accumulator
 
     def close_lists():
         while list_stack:
@@ -320,6 +321,15 @@ def parse(src: str, name: str = "", section_edit: bool = True) -> tuple[str, lis
             if entry[1]:   # parent <li> was left open for this sub-list
                 out.append("</li>")
             out.append(f"</{entry[0]}>")
+
+    def flush_para():
+        """Emit accumulated paragraph lines as a single <p> and clear the buffer."""
+        if not para_lines:
+            return
+        last_idx = para_lines[-1][0]
+        content = " ".join(h for _, h in para_lines)
+        out.append(f'<p data-line="{last_idx}">{content}</p>')
+        para_lines.clear()
 
     def close_table():
         if not table_rows:
@@ -338,6 +348,7 @@ def parse(src: str, name: str = "", section_edit: bool = True) -> tuple[str, lis
         # fenced code blocks
         if line.startswith("```"):
             if not in_code:
+                flush_para()
                 close_table()
                 close_lists()
                 code_lang, in_code, code_lines = line[3:].strip(), True, []
@@ -352,11 +363,12 @@ def parse(src: str, name: str = "", section_edit: bool = True) -> tuple[str, lis
 
         # horizontal rule
         if re.fullmatch(r"-{4,}", line.strip()):
-            close_table(); close_lists(); out.append("<hr>"); continue
+            flush_para(); close_table(); close_lists(); out.append("<hr>"); continue
 
         # headings — DokuWiki style: more = means bigger (6= → h1, 2= → h5)
         hm = re.fullmatch(r"(={2,6}) (.+?) \1", line.rstrip())
         if hm:
+            flush_para()
             close_table()
             close_lists()
             level, text = 7 - len(hm.group(1)), hm.group(2)
@@ -378,6 +390,7 @@ def parse(src: str, name: str = "", section_edit: bool = True) -> tuple[str, lis
         # todo checkboxes
         cbm = re.match(r"^(\s*)\[([ x~])\] (.*)", line)
         if cbm:
+            flush_para()
             close_table()
             close_lists()
             todo_indent = len(cbm.group(1))
@@ -391,6 +404,7 @@ def parse(src: str, name: str = "", section_edit: bool = True) -> tuple[str, lis
         # table rows — DokuWiki syntax: lines starting with | or ^
         trow = _parse_table_row(line)
         if trow is not None:
+            flush_para()
             close_lists()
             table_rows.append(trow)
             continue
@@ -398,6 +412,7 @@ def parse(src: str, name: str = "", section_edit: bool = True) -> tuple[str, lis
         # lists — DokuWiki requires minimum 2-space indent; 2 spaces = top-level
         lm = re.match(r"^( {2,})([*\-]) (.+)", line)
         if lm:
+            flush_para()
             close_table()
             indent = max(0, len(lm.group(1)) // 2 - 1)
             tag = "ul" if lm.group(2) == "*" else "ol"
@@ -434,10 +449,11 @@ def parse(src: str, name: str = "", section_edit: bool = True) -> tuple[str, lis
         close_table()
         close_lists()
         if line.strip() == "":
-            out.append("")
+            flush_para()
         else:
-            out.append(f'<p data-line="{i + meta_offset}">{parse_inline(line, cur_ns)}</p>')
+            para_lines.append((i + meta_offset, parse_inline(line, cur_ns)))
 
+    flush_para()
     close_table()
     close_lists()
     # emit any unclosed fenced code block at EOF
@@ -484,7 +500,7 @@ nav form{margin-left:0}nav input[type=search]{padding:.3rem .6rem;border-radius:
 .toc a{color:#2c3e50;text-decoration:none}.toc a:hover{text-decoration:underline}
 h1,h2,h3,h4,h5{margin:1rem 0 .4rem}
 h2{border-bottom:1px solid #ddd;padding-bottom:.2rem;display:flex;justify-content:space-between;align-items:center}
-p{margin:.4rem 0}pre{background:#f4f4f4;padding:.8rem;border-radius:4px;overflow-x:auto;margin:.5rem 0}
+p{margin:.8rem 0}pre{background:#f4f4f4;padding:.8rem;border-radius:4px;overflow-x:auto;margin:.5rem 0}
 code{background:#f0f0f0;padding:0 .3rem;border-radius:3px;font-size:.9em}pre code{background:none;padding:0}
 hr{border:none;border-top:1px solid #ddd;margin:1rem 0}
 .content ul,.content ol{padding-left:1.5em;margin:.3rem 0}
