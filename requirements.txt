@@ -3,6 +3,9 @@ fastapi
 uvicorn[standard]
 python-multipart
 
+# Required on Windows for timezone support (zoneinfo has no system DB on Windows)
+tzdata
+
 # Required when AUTH_ENABLED = True (default)
 bcrypt
 

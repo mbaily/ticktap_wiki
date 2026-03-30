@@ -1099,7 +1099,8 @@ def view(request: Request, name: str, _auth: None = Depends(require_auth)):
         f'newLi.dataset.indent=_qtodoIndent;'
         f'newLi.dataset.prefix=_qtodoPrefix;'
         f'newLi.textContent=text;'
-        f'_qtodoEl.insertAdjacentElement("afterend",newLi);'
+        f'if(_qtodoEl){{_qtodoEl.insertAdjacentElement("afterend",newLi);}}'
+        f'else{{var content2=document.querySelector(".content");if(content2)content2.appendChild(newLi);}}'
         f'newLi.style.background="rgba(39,174,96,.15)";'
         f'setTimeout(function(){{newLi.style.background="";}},800);'
         f'}}'
@@ -1914,7 +1915,10 @@ async def restore_snapshot(name: str, snap: str = Form(""), _auth: None = Depend
 
 @app.get("/today")
 def today(_auth: None = Depends(require_auth)):
-    tz = ZoneInfo(DISPLAY_TIMEZONE)
+    try:
+        tz = ZoneInfo(DISPLAY_TIMEZONE)
+    except Exception:
+        tz = timezone.utc
     today_str = datetime.now(tz).strftime("%Y-%m-%d")
     return RedirectResponse(f"/wiki/journal/{today_str}", status_code=303)
 
@@ -2026,13 +2030,16 @@ async def reorder_todos(name: str, request: Request, _auth: None = Depends(requi
     for ln in order:
         if ln < 0 or ln >= len(lines) or not todo_re.match(lines[ln]):
             return JSONResponse({"ok": False, "error": "Invalid line"}, status_code=400)
-    # Map the new display order onto ascending file positions
+    # Rebuild the file: walk through every line; when we hit one of the positions
+    # from `order`, emit the todos in the new display sequence instead.
+    # This correctly handles non-contiguous todo blocks.
     sorted_positions = sorted(order)
-    old_contents = [lines[ln] for ln in order]
-    for j, pos in enumerate(sorted_positions):
-        lines[pos] = old_contents[j]
+    new_contents = [lines[ln] for ln in order]  # todos in new display order
+    new_lines = list(lines)
+    for i, pos in enumerate(sorted_positions):
+        new_lines[pos] = new_contents[i]
     try:
-        write_page(name, "".join(lines), snapshot=False)
+        write_page(name, "".join(new_lines), snapshot=False)
     except OSError:
         return JSONResponse({"ok": False, "error": "Save failed"}, status_code=500)
     return JSONResponse({"ok": True})
