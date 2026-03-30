@@ -41,6 +41,7 @@ TODO_CYCLE_3STATE = False           # True = cycle [ ]→[x]→[~]→[ ]; False 
 # Page-name template for the /today redirect.  Uses wiki link notation (colons for namespaces),
 # same as [[ns:PageName]] in markup.  Available tokens:
 #   {yyyy}=4-digit year  {yy}=2-digit year
+#   {mmmm}=full month name (March)   {mmm}=short month name (Mar)
 #   {mm}=zero-padded month (01-12)   {m}=month without padding (1-12)
 #   {dd}=zero-padded day (01-31)     {d}=day without padding (1-31)
 #   {www}=weekday name (Monday…)     {ww}=short weekday (Mon…)
@@ -50,7 +51,7 @@ TODO_CYCLE_3STATE = False           # True = cycle [ ]→[x]→[~]→[ ]; False 
 #   "journal:{yyyy}:W{wn}"        → [[journal:2026:W14]]    (weekly pages)
 #   "journal:{yyyy}:{mm}:{dd}"    → [[journal:2026:03:30]]  (daily, nested namespaces)
 #   "{yyyy}-{mm}"                 → [[2026-03]]              (monthly pages, root namespace)
-JOURNAL_PAGE_FORMAT = "journal:{yyyy}-{mm}-{dd}"
+JOURNAL_PAGE_FORMAT = "Todo {yyyy} {mmmm}"
 
 app = FastAPI()
 
@@ -1953,6 +1954,8 @@ def today(_auth: None = Depends(require_auth)):
         JOURNAL_PAGE_FORMAT
         .replace("{yyyy}", now.strftime("%Y"))
         .replace("{yy}",   now.strftime("%y"))
+        .replace("{mmmm}", now.strftime("%B"))
+        .replace("{mmm}",  now.strftime("%b"))
         .replace("{mm}",   now.strftime("%m"))
         .replace("{m}",    str(now.month))
         .replace("{dd}",   now.strftime("%d"))
