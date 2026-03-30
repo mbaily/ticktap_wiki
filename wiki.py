@@ -377,9 +377,12 @@ def parse(src: str, name: str = "", section_edit: bool = True) -> tuple[str, lis
         if cbm:
             close_table()
             close_lists()
+            todo_indent = len(cbm.group(1))
+            todo_level = todo_indent // 2
             state, text = cbm.group(2), parse_inline(cbm.group(3), cur_ns)
             checked = " checked" if state == "x" else ""
-            out.append(f'<p class="todo" data-line="{i + meta_offset}"><input type="checkbox"{checked} data-line="{i + meta_offset}" data-name="{html.escape(name)}"> {text}</p>')
+            indent_style = f' style="padding-left:{todo_level * 1.5}em"' if todo_level else ''
+            out.append(f'<p class="todo" data-line="{i + meta_offset}" data-indent="{todo_indent}" data-prefix="[ ] "{indent_style}><input type="checkbox"{checked} data-line="{i + meta_offset}" data-name="{html.escape(name)}"> {text}</p>')
             continue
 
         # table rows — DokuWiki syntax: lines starting with | or ^
@@ -402,7 +405,9 @@ def parse(src: str, name: str = "", section_edit: bool = True) -> tuple[str, lis
                 out.append(f"</{list_stack.pop()[1]}>")
             while len(list_stack) <= indent:
                 list_stack.append((len(list_stack), tag)); out.append(f"<{tag}>")
-            out.append(f'<li data-line="{i + meta_offset}">{text}</li>')
+            li_indent = len(lm.group(1))
+            li_prefix = lm.group(2) + " "
+            out.append(f'<li data-line="{i + meta_offset}" data-indent="{li_indent}" data-prefix="{li_prefix}">{text}</li>')
             continue
 
         close_table()
@@ -881,12 +886,14 @@ def view(request: Request, name: str, _auth: None = Depends(require_auth)):
         f'border-radius:3px;border:1px solid #777;cursor:pointer;background:none;color:#ddd">&times;</button>'
         f'</div></div>'
         f'<script>'
-        f'var _qtodoEl=null,_qtodoLine=-1;'
+        f'var _qtodoEl=null,_qtodoLine=-1,_qtodoIndent=0,_qtodoPrefix="[ ] ";'
         f'function qtodoSelect(el){{'
         f'if(_qtodoEl)_qtodoEl.classList.remove("qtodo-sel");'
         f'_qtodoEl=el;_qtodoLine=parseInt(el.dataset.line,10);'
+        f'_qtodoIndent=parseInt(el.dataset.indent||"0",10);'
+        f'_qtodoPrefix=el.dataset.prefix||"[ ] ";'
         f'el.classList.add("qtodo-sel");'
-        f'var p=(el.dataset.isimg?el.getAttribute("alt"):null)||el.innerText.replace(/^\\s*\\[.\\]\\s*/,"").replace(/\\s+/g," ").trim();'
+        f'var p=el.innerText.replace(/^\\s*\\[.\\]\\s*/,"").replace(/\\s+/g," ").trim();'
         f'if(p.length>50)p=p.slice(0,50)+"\u2026";'
         f'document.getElementById("qtodo-preview").textContent=p;'
         f'document.getElementById("qtodo-bar").style.display="flex";'
@@ -894,7 +901,7 @@ def view(request: Request, name: str, _auth: None = Depends(require_auth)):
         f'}}'
         f'function qtodoCancel(){{'
         f'if(_qtodoEl)_qtodoEl.classList.remove("qtodo-sel");'
-        f'_qtodoEl=null;_qtodoLine=-1;'
+        f'_qtodoEl=null;_qtodoLine=-1;_qtodoIndent=0;_qtodoPrefix="[ ] ";'
         f'document.getElementById("qtodo-bar").style.display="none";'
         f'}}'
         f'async function qtodoSubmit(){{'
@@ -906,14 +913,17 @@ def view(request: Request, name: str, _auth: None = Depends(require_auth)):
         f'var resp=await fetch("/add-todo/{html.escape(name)}",{{'
         f'  method:"POST",'
         f'  headers:{{"Content-Type":"application/json"}},'
-        f'  body:JSON.stringify({{after_line:_qtodoLine,text:text}})'
+        f'  body:JSON.stringify({{after_line:_qtodoLine,text:text,indent:_qtodoIndent,prefix:_qtodoPrefix}})'
         f'}});'
         f'var data=await resp.json();'
         f'if(!resp.ok||!data.ok){{alert(data.error||"Save failed");btn.disabled=false;return;}}'
-        f'/* Insert new todo element after the selected block */'
+        f'if(_qtodoPrefix[0]==="["){{'
         f'var newEl=document.createElement("p");'
         f'newEl.className="todo";'
         f'newEl.dataset.line=data.line;'
+        f'newEl.dataset.indent=_qtodoIndent;'
+        f'newEl.dataset.prefix=_qtodoPrefix;'
+        f'if(_qtodoIndent>0)newEl.style.paddingLeft=(_qtodoIndent/2*1.5)+"em";'
         f'var cb=document.createElement("input");'
         f'cb.type="checkbox";cb.dataset.line=data.line;cb.dataset.name="{html.escape(name)}";'
         f'cb.addEventListener("change",function(){{'
@@ -921,13 +931,22 @@ def view(request: Request, name: str, _auth: None = Depends(require_auth)):
         f'}});'
         f'newEl.appendChild(cb);'
         f'newEl.appendChild(document.createTextNode(" "+text));'
-        f'/* find the block-level ancestor inside .content to insert after */'
         f'var anchor=_qtodoEl;'
         f'var content=document.querySelector(".content");'
         f'while(anchor.parentElement&&anchor.parentElement!==content)anchor=anchor.parentElement;'
         f'anchor.insertAdjacentElement("afterend",newEl);'
         f'newEl.style.background="rgba(39,174,96,.15)";'
         f'setTimeout(function(){{newEl.style.background="";}},800);'
+        f'}}else{{'
+        f'var newLi=document.createElement("li");'
+        f'newLi.dataset.line=data.line;'
+        f'newLi.dataset.indent=_qtodoIndent;'
+        f'newLi.dataset.prefix=_qtodoPrefix;'
+        f'newLi.textContent=text;'
+        f'_qtodoEl.insertAdjacentElement("afterend",newLi);'
+        f'newLi.style.background="rgba(39,174,96,.15)";'
+        f'setTimeout(function(){{newLi.style.background="";}},800);'
+        f'}}'
         f'qtodoCancel();'
         f'}}catch(e){{alert("Network error");}}'
         f'finally{{btn.disabled=false;}}'
@@ -1094,7 +1113,13 @@ async def add_todo(name: str, request: Request, _auth: None = Depends(require_au
         return JSONResponse({"ok": False, "error": "Invalid JSON"}, status_code=400)
     after_line = body.get("after_line", -1)
     text = body.get("text", "")
+    indent = body.get("indent", 0)
+    prefix = body.get("prefix", "[ ] ")
     if not isinstance(after_line, int) or not isinstance(text, str):
+        return JSONResponse({"ok": False, "error": "Bad request"}, status_code=400)
+    if not isinstance(indent, int) or indent < 0 or indent > 20:
+        return JSONResponse({"ok": False, "error": "Bad request"}, status_code=400)
+    if prefix not in ("[ ] ", "* ", "- "):
         return JSONResponse({"ok": False, "error": "Bad request"}, status_code=400)
     text = text.replace("\r", " ").replace("\n", " ").strip()
     if not text:
@@ -1111,7 +1136,7 @@ async def add_todo(name: str, request: Request, _auth: None = Depends(require_au
     if lines and not lines[-1].endswith("\n"):
         lines[-1] += "\n"
     insert_at = max(0, min(after_line + 1, len(lines)))
-    lines.insert(insert_at, f"[ ] {text}\n")
+    lines.insert(insert_at, f"{' ' * indent}{prefix}{text}\n")
     try:
         write_page(name, "".join(lines))
     except OSError:
