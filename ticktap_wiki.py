@@ -1681,10 +1681,10 @@ def _login_page(next_url: str, error: str = "") -> HTMLResponse:
             f'<label>Password<input type="password" name="password" autocomplete="current-password" required></label>'
             f'<button type="submit">Log in</button>'
             f'</form></div>')
-    dark = f'<style>{CSS_DARK}</style>' if DARK_MODE else ""
     return HTMLResponse(f'<!doctype html><html lang="en"><head><meta charset="utf-8">'
                         f'<meta name="viewport" content="width=device-width,initial-scale=1">'
-                        f'<title>Login \u2014 {html.escape(SITE_TITLE)}</title><style>{CSS.replace("__ITEM_SP__", ITEM_SPACING)}</style>{dark}</head>'
+                        f'<title>Login \u2014 {html.escape(SITE_TITLE)}</title>'
+                        f'<link rel="stylesheet" href="{CSS_URL}"></head>'
                         f'<body>{body}</body></html>')
 
 @app.get("/login", response_class=HTMLResponse)
