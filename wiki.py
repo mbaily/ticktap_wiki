@@ -530,6 +530,7 @@ nav{background:#2c3e50;color:#fff;padding:.5rem 1rem;display:flex;gap:1rem;align
 nav a{color:#ecf0f1;text-decoration:none}nav a:hover{text-decoration:underline}
 nav form{margin-left:0}nav input[type=search]{padding:.3rem .6rem;border-radius:4px;border:none}
 .toolbar{background:#ecf0f1;padding:.4rem 1rem;display:flex;gap:.6rem;align-items:center;font-size:.9rem;flex-wrap:wrap}
+.toolbar .breadcrumb{margin-bottom:0}
 .toolbar a,.toolbar button{color:#2c3e50;background:none;border:1px solid #aaa;padding:.2rem .5rem;border-radius:3px;cursor:pointer;font-size:.85rem;text-decoration:none}
 .layout{display:flex;max-width:1100px;margin:1rem auto;gap:1rem;padding:0 1rem}
 .content{flex:1;min-width:0;background:#fff;padding:1rem;border-radius:4px;border:1px solid #ddd}
