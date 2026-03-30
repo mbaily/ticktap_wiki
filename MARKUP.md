@@ -17,7 +17,7 @@ More equals signs means a bigger heading — the same convention as DokuWiki.
 ```
 
 - The equals signs must be **symmetric** and the heading text must have a space inside on each side.
-- Each heading generates an `id` anchor: lowercase, spaces replaced by `-`.
+- Each heading generates an `id` anchor: lowercase, all non-alphanumeric characters replaced by `-`.
 - Duplicate anchor names get a `-2`, `-3` suffix automatically.
 - `=====` headings (h2) are the **section boundary** — each gets its own `[edit]` button in the reader view.
 
@@ -109,7 +109,11 @@ Rendering rules:
 Each 2-space indent adds 1.5 em of visual left-padding in the rendered view.
 
 - **Checkbox toggle**: clicking a checkbox in the browser **immediately saves** the new state (no page reload).
-- **Quick-add**: clicking any todo item opens the quick-add bar at the bottom of the screen. The new item is inserted as a **sibling at the same indent level**. Press **Enter** or click ✚ Add.
+  - Controlled by `TODO_CYCLE_3STATE` in the config section of `ticktap_wiki.py`:
+    - `TODO_CYCLE_3STATE = False` *(default)* — toggles `[ ]` ↔ `[x]` only.
+    - `TODO_CYCLE_3STATE = True` — cycles `[ ]` → `[x]` → `[~]` → `[ ]`.
+- **Quick-add**: clicking any todo item (or list item) opens the quick-add bar at the bottom of the screen. The new item is inserted as a **sibling at the same indent level**. Press **Enter** or click ✚ Add. A green **+** floating button at the bottom-right of every page opens the quick-add bar positioned to insert at the end of the page.
+- **Drag-and-drop reordering** *(desktop only)*: on desktop browsers, todo items can be dragged and dropped to reorder them. The new order is saved immediately.
 - The state marker (`[ ]`, `[x]`, `[~]`) only affects the checkbox appearance; quick-add always inserts a new `[ ]` item.
 
 ---
@@ -237,7 +241,8 @@ author: alice
 
 - Must start on the first line with `~~META:`.
 - Closed by `~~` on its own line.
-- Content is free-form; no specific keys are required.
+- Content is free-form key/value pairs (`key: value`, one per line).
+- **Recognised key — `tags`**: a comma-separated list of tags (e.g. `tags: project, notes`). Tags are displayed as pills on the page toolbar and are browsable via the **Tags** nav-bar link.
 
 ---
 
