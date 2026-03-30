@@ -46,7 +46,7 @@ First paragraph.
 Second paragraph.
 ```
 
-**Single newline behaviour** — controlled by `LINEBREAK_ON_NEWLINE` in the config section of `wiki.py`:
+**Single newline behaviour** — controlled by `LINEBREAK_ON_NEWLINE` in the config section of `ticktap_wiki.py`:
 
 | Setting | Effect |
 |---------|--------|

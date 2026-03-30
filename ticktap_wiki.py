@@ -27,6 +27,7 @@ TLS_CERT_FILE     = "cert.pem"
 TLS_KEY_FILE      = "key.pem"
 
 DARK_MODE         = True         # set True to use dark colour scheme
+SITE_TITLE        = "TickTap Wiki"        # site-wide title shown in nav bar, page titles, and login page
 
 VERSIONING_ENABLED = True          # set False to disable page history
 ATTIC_DIR          = Path(os.environ.get("WIKI_ATTIC_DIR", "attic"))
@@ -670,7 +671,7 @@ def nav_bar(search_q: str = "", username: str = "") -> str:
     q = html.escape(search_q)
     logout = (f' <a href="/logout" style="margin-left:auto;font-size:.85rem;color:#ecf0f1">'
               f'&#128274; logout ({html.escape(username)})</a>') if username else ""
-    return (f'<nav><a href="/wiki/Home"><strong>&#128366; Wiki</strong></a>'
+    return (f'<nav><a href="/wiki/Home"><strong>&#128366; {html.escape(SITE_TITLE)}</strong></a>'
             f'<a href="/sitemap">Site Map</a><a href="/new">+ New Page</a>'
             f'<a href="/today">&#128197; Today</a>'
             f'<a href="/tags">&#127991; Tags</a>'
@@ -730,7 +731,7 @@ def shell(title: str, body: str, search_q: str = "", request: Request | None = N
     dark = f'<style>{CSS_DARK}</style>' if DARK_MODE else ""
     return (f'<!doctype html><html lang="en"><head><meta charset="utf-8">'
             f'<meta name="viewport" content="width=device-width,initial-scale=1">'
-            f'<title>{html.escape(title)} \u2014 Wiki</title>'
+            f'<title>{html.escape(title)} \u2014 {html.escape(SITE_TITLE)}</title>'
             f'<style>{CSS}</style>{dark}</head><body>'
             f'{nav_bar(search_q, username)}{pins_bar(request)}{body}'
             f'<script>{JS}</script></body></html>')
@@ -1535,7 +1536,7 @@ def _login_page(next_url: str, error: str = "") -> HTMLResponse:
     dark = f'<style>{CSS_DARK}</style>' if DARK_MODE else ""
     return HTMLResponse(f'<!doctype html><html lang="en"><head><meta charset="utf-8">'
                         f'<meta name="viewport" content="width=device-width,initial-scale=1">'
-                        f'<title>Login \u2014 Wiki</title><style>{CSS}</style>{dark}</head>'
+                        f'<title>Login \u2014 {html.escape(SITE_TITLE)}</title><style>{CSS}</style>{dark}</head>'
                         f'<body>{body}</body></html>')
 
 @app.get("/login", response_class=HTMLResponse)
@@ -2143,23 +2144,23 @@ if not home.exists():
 if __name__ == "__main__":
     import sys, getpass, argparse
     ap = argparse.ArgumentParser(
-        description="wiki.py — personal wiki server",
+        description="ticktap_wiki.py — personal wiki server",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""\
 MODES
   Start the server (default):
-    python wiki.py
+    python ticktap_wiki.py
 
   Add or update a user in the htpasswd file, then exit:
-    python wiki.py --adduser alice
-    python wiki.py --adduser alice --htpasswd /path/to/.htpasswd
+    python ticktap_wiki.py --adduser alice
+    python ticktap_wiki.py --adduser alice --htpasswd /path/to/.htpasswd
 
   Generate a self-signed TLS certificate + key, then exit:
-    python wiki.py --gencert
-    python wiki.py --gencert --cert server.pem --key server.key --days 3650 --host mywiki.local
+    python ticktap_wiki.py --gencert
+    python ticktap_wiki.py --gencert --cert server.pem --key server.key --days 3650 --host mywiki.local
 
 CONFIGURATION
-  Edit the '# ── config ──' block near the top of wiki.py to change:
+  Edit the '# ── config ──' block near the top of ticktap_wiki.py to change:
     AUTH_ENABLED      enable login (requires .htpasswd)
     HTPASSWD_FILE     path to htpasswd file (default: .htpasswd)
     TOKEN_EXPIRY_DAYS login token lifetime in days (default: 30)
@@ -2229,7 +2230,7 @@ CONFIGURATION
         Path(args.cert).write_bytes(cert.public_bytes(serialization.Encoding.PEM))
         print(f"  Key : {args.key}")
         print(f"  Cert: {args.cert}")
-        print("Done. Set HTTPS_ENABLED=True and update TLS_CERT_FILE/TLS_KEY_FILE in wiki.py.")
+        print("Done. Set HTTPS_ENABLED=True and update TLS_CERT_FILE/TLS_KEY_FILE in ticktap_wiki.py.")
         sys.exit(0)
 
     if args.adduser:
@@ -2258,7 +2259,7 @@ CONFIGURATION
             raise SystemExit("AUTH_ENABLED=True requires bcrypt: pip install bcrypt")
         if not HTPASSWD_FILE.exists():
             raise SystemExit(f"AUTH_ENABLED=True but {HTPASSWD_FILE} not found.\n"
-                             f"Create it with: python wiki.py --adduser USERNAME")
+                             f"Create it with: python ticktap_wiki.py --adduser USERNAME")
     if HTTPS_ENABLED:
         if not Path(TLS_CERT_FILE).exists():
             raise SystemExit(f"HTTPS_ENABLED=True but cert file not found: {TLS_CERT_FILE}")

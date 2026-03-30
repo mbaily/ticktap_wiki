@@ -4,7 +4,7 @@
 
 - Single-file application — the entire server is one `.py` file.
 - Minimal lines of code (target: < 120 LOC excluding blank lines and comments).
-- No build step, no bundler, no database — runs with `python wiki.py`.
+- No build step, no bundler, no database — runs with `python ticktap_wiki.py`.
 - Browser-based UI; no JavaScript framework required.
 - Feature parity with DokuWiki's core authoring experience.
 
@@ -351,14 +351,14 @@ A separate, dedicated editing mode — never mixed into the reader view.
 
 ## 14. CLI Administration
 
-Running `python wiki.py` starts the server. Additional modes:
+Running `python ticktap_wiki.py` starts the server. Additional modes:
 
 | Command | Description |
 |---------|-------------|
-| `python wiki.py --adduser USERNAME` | Interactively add or update a bcrypt password entry in the htpasswd file. |
-| `python wiki.py --adduser USERNAME --htpasswd PATH` | Use a custom htpasswd file path. |
-| `python wiki.py --gencert` | Generate a self-signed TLS certificate and private key, then exit. |
-| `python wiki.py --gencert --cert F --key F --days N --cn HOST` | Customise cert output paths, validity, and Common Name / SAN hostname. |
+| `python ticktap_wiki.py --adduser USERNAME` | Interactively add or update a bcrypt password entry in the htpasswd file. |
+| `python ticktap_wiki.py --adduser USERNAME --htpasswd PATH` | Use a custom htpasswd file path. |
+| `python ticktap_wiki.py --gencert` | Generate a self-signed TLS certificate and private key, then exit. |
+| `python ticktap_wiki.py --gencert --cert F --key F --days N --cn HOST` | Customise cert output paths, validity, and Common Name / SAN hostname. |
 
 
 ---
@@ -543,7 +543,7 @@ If `alt` is omitted, the filename (without extension) is used.
 
 ### 16.2 Configuration Block
 
-A `# ── config ──` section is added near the top of `wiki.py`, immediately after the existing startup constants, using plain Python assignments. To change a setting, edit `wiki.py` directly:
+A `# ── config ──` section is added near the top of `ticktap_wiki.py`, immediately after the existing startup constants, using plain Python assignments. To change a setting, edit `ticktap_wiki.py` directly:
 
 ```python
 # ── config ──────────────────────────────────────────────────────────────────
@@ -572,7 +572,7 @@ TLS_KEY_FILE      = "key.pem"
 
 **Problem:** browsers enforce a ≤24 h `Max-Age` / session expiry for cookies set over HTTPS with a self-signed certificate in many configurations. This makes a wiki on a LAN with a self-signed cert effectively unusable.
 
-**Solution:** tokens are stored server-side in a JSON file (`TOKEN_FILE`, default `.wiki_tokens` next to `wiki.py`) and passed to the client as a plain query-string or `Authorization` header value — but in practice delivered via a `<meta http-equiv="refresh">` redirect that embeds the token in the URL, or as a long-lived `SameSite=Strict` cookie where the browser allows it.
+**Solution:** tokens are stored server-side in a JSON file (`TOKEN_FILE`, default `.wiki_tokens` next to `ticktap_wiki.py`) and passed to the client as a plain query-string or `Authorization` header value — but in practice delivered via a `<meta http-equiv="refresh">` redirect that embeds the token in the URL, or as a long-lived `SameSite=Strict` cookie where the browser allows it.
 
 **Token file format** (`.wiki_tokens`, JSON):
 ```json
@@ -619,16 +619,16 @@ TLS_KEY_FILE      = "key.pem"
 
 - Tokens are **not JWTs** — they are opaque random strings. The server is the authority.
 - Brute-force: after 5 consecutive failed login attempts from the same IP within 60 seconds, the login endpoint returns HTTP 429 for 60 seconds (in-memory counter, resets on server restart).
-- The token file must not be served by the wiki itself; `GET /files/…` and `GET /wiki/…` cannot reach it (it lives at the same level as `wiki.py`, not inside `pages/` or `files/`).
+- The token file must not be served by the wiki itself; `GET /files/…` and `GET /wiki/…` cannot reach it (it lives at the same level as `ticktap_wiki.py`, not inside `pages/` or `files/`).
 - Password comparison always uses the constant-time functions provided by `passlib`.
 
 ### 16.9 Built-in htpasswd Manager (Windows-friendly)
 
-Because Apache's `htpasswd` command-line tool is not available on Windows, `wiki.py` includes a `--adduser` subcommand that creates or updates entries in the htpasswd file without any external tools:
+Because Apache's `htpasswd` command-line tool is not available on Windows, `ticktap_wiki.py` includes a `--adduser` subcommand that creates or updates entries in the htpasswd file without any external tools:
 
 ```
-python wiki.py --adduser alice
-python wiki.py --adduser alice --htpasswd /path/to/.htpasswd
+python ticktap_wiki.py --adduser alice
+python ticktap_wiki.py --adduser alice --htpasswd /path/to/.htpasswd
 ```
 
 Behaviour:
@@ -641,11 +641,11 @@ Behaviour:
 
 ### 16.10 Self-signed Certificate Generator
 
-`wiki.py` includes a `--gencert` subcommand to generate a self-signed TLS certificate + private key without needing OpenSSL on the PATH (requires `pip install cryptography`):
+`ticktap_wiki.py` includes a `--gencert` subcommand to generate a self-signed TLS certificate + private key without needing OpenSSL on the PATH (requires `pip install cryptography`):
 
 ```
-python wiki.py --gencert
-python wiki.py --gencert --cert server.pem --key server.key --days 3650 --cn mywiki.local
+python ticktap_wiki.py --gencert
+python ticktap_wiki.py --gencert --cert server.pem --key server.key --days 3650 --cn mywiki.local
 ```
 
 Options:
@@ -763,7 +763,7 @@ The result is at most one snapshot per band ($K$ snapshots total). Multiple rapi
 
 ### 18.6 Configuration
 
-Added to the `# ── config ──` block in `wiki.py`:
+Added to the `# ── config ──` block in `ticktap_wiki.py`:
 
 ```python
 VERSIONING_ENABLED = True          # set False to disable snapshot creation

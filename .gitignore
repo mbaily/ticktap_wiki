@@ -1,0 +1,15 @@
+# Runtime data — not part of the source
+pages/
+files/
+attic/
+__pycache__/
+.pytest_cache/
+
+# Secrets & TLS
+.htpasswd
+.wiki_tokens
+cert.pem
+key.pem
+
+# Python venv
+.venv/
