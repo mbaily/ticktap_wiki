@@ -1342,7 +1342,7 @@ async def add_todo(name: str, request: Request, _auth: None = Depends(require_au
     insert_at = max(0, min(after_line + 1, len(lines)))
     lines.insert(insert_at, f"{' ' * indent}{prefix}{text}\n")
     try:
-        write_page(name, "".join(lines))
+        write_page(name, "".join(lines), snapshot=False)
     except OSError:
         return JSONResponse({"ok": False, "error": "Save failed"}, status_code=500)
     return JSONResponse({"ok": True, "line": insert_at})
@@ -1400,6 +1400,7 @@ def sitemap(request: Request, _auth: None = Depends(require_auth)):
 
 @app.get("/search", response_class=HTMLResponse)
 def search(request: Request, q: str = "", _auth: None = Depends(require_auth)):
+    q = q.strip()
     if not q:
         return RedirectResponse("/")
     ql = q.lower()
