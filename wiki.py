@@ -577,7 +577,7 @@ mark{background:#fff3cd;padding:0 .1rem;border-radius:2px}
 .search-hit{font-size:.85rem;font-family:monospace;color:#444;padding:.15rem .3rem;border-left:3px solid #ddd;margin:.2rem 0}
 .pin-bar{background:#243447;padding:.3rem 1rem;display:flex;gap:.5rem;flex-wrap:wrap;align-items:center;font-size:.85rem}
 .pin-bar a{color:#8ab4f8;text-decoration:none;background:rgba(255,255,255,.08);padding:.15rem .5rem;border-radius:3px}.pin-bar a:hover{text-decoration:underline}
-p.todo[draggable]{cursor:grab}p.todo.drag-over{border-top:2px solid #3498db}
+p.todo[draggable]{cursor:grab}p.todo.drag-over-before{border-top:2px solid #3498db}p.todo.drag-over-after{border-bottom:2px solid #3498db}
 """
 
 CSS_DARK = """
@@ -1131,19 +1131,20 @@ def view(request: Request, name: str, _auth: None = Depends(require_auth)):
         f'}});'
         f'document.addEventListener("dragend",function(){{'
         f'if(_drag){{_drag.style.opacity="";_drag=null;}}'
-        f'document.querySelectorAll("p.todo.drag-over").forEach(function(el){{el.classList.remove("drag-over");}});'
+        f'document.querySelectorAll("p.todo.drag-over-before,p.todo.drag-over-after").forEach(function(el){{el.classList.remove("drag-over-before","drag-over-after");}});'
         f'}});'
         f'document.addEventListener("dragover",function(e){{'
         f'var el=e.target.closest("p.todo[draggable]");'
         f'if(el&&el!==_drag){{e.preventDefault();'
-        f'document.querySelectorAll("p.todo.drag-over").forEach(function(t){{t.classList.remove("drag-over");}});'
-        f'el.classList.add("drag-over");'
+        f'document.querySelectorAll("p.todo.drag-over-before,p.todo.drag-over-after").forEach(function(t){{t.classList.remove("drag-over-before","drag-over-after");}});'
+        f'var r=el.getBoundingClientRect();'
+        f'el.classList.add(e.clientY<r.top+r.height/2?"drag-over-before":"drag-over-after");'
         f'}}else if(_drag&&e.target.closest(".content")){{e.preventDefault();}}'
         f'}});'
         f'document.addEventListener("drop",function(e){{'
         f'if(!_drag)return;'
         f'var target=e.target.closest("p.todo[draggable]");'
-        f'document.querySelectorAll("p.todo.drag-over").forEach(function(t){{t.classList.remove("drag-over");}});'
+        f'document.querySelectorAll("p.todo.drag-over-before,p.todo.drag-over-after").forEach(function(t){{t.classList.remove("drag-over-before","drag-over-after");}});'
         f'if(target&&target!==_drag){{e.preventDefault();'
         f'var rect=target.getBoundingClientRect();'
         f'if(e.clientY<rect.top+rect.height/2)target.insertAdjacentElement("beforebegin",_drag);'
