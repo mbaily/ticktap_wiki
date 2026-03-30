@@ -1,5 +1,6 @@
 import os, re, html, time, secrets, json, math, shutil
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 from pathlib import Path
 from fastapi import Depends, FastAPI, File, Form, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
@@ -30,6 +31,7 @@ VERSIONING_ENABLED = True          # set False to disable page history
 ATTIC_DIR          = Path(os.environ.get("WIKI_ATTIC_DIR", "attic"))
 VERSION_BASE_SECS  = 30            # T — base unit for e^i × T retention formula
 VERSION_SLOTS      = 10            # K — number of retention bands
+DISPLAY_TIMEZONE   = "Australia/Melbourne"         # IANA timezone for history timestamps, e.g. "Europe/London", "America/New_York"
 
 app = FastAPI()
 
@@ -96,7 +98,8 @@ def _attic_page_dir(name: str) -> Path:
 def _save_snapshot(name: str, content: str):
     d = _attic_page_dir(name)
     d.mkdir(parents=True, exist_ok=True)
-    ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    _now = datetime.now(timezone.utc)
+    ts = _now.strftime("%Y%m%d_%H%M%S") + f"_{_now.microsecond:06d}"
     snap = d / f"{ts}.wiki"
     if snap.exists():
         return  # same-second save: keep the first snapshot of this second
@@ -141,6 +144,17 @@ def _prune_attic(name: str):
     for dt, age, f in entries:
         if f not in keep:
             f.unlink(missing_ok=True)
+
+def _snap_ts_to_display(ts: str) -> str:
+    """Convert a snapshot filename stem (YYYYmmdd_HHMMSS) to a display string in DISPLAY_TIMEZONE."""
+    try:
+        dt = datetime.strptime(ts[:15], "%Y%m%d_%H%M%S").replace(tzinfo=timezone.utc)
+        tz = ZoneInfo(DISPLAY_TIMEZONE)
+        dt_local = dt.astimezone(tz)
+        tz_label = DISPLAY_TIMEZONE if DISPLAY_TIMEZONE != "UTC" else "UTC"
+        return dt_local.strftime(f"%Y-%m-%d %H:%M:%S {tz_label}")
+    except Exception:
+        return f"{ts[:4]}-{ts[4:6]}-{ts[6:8]} {ts[9:11]}:{ts[11:13]}:{ts[13:15]} UTC"
 
 def strip_meta(src: str) -> tuple[str, int]:
     """Return (stripped_source, number_of_lines_removed_from_top)."""
@@ -510,7 +524,7 @@ def dir_listing(d: Path, prefix: str) -> str:
                 mtime = time.strftime("%Y-%m-%d", time.localtime(child.stat().st_mtime))
             except OSError:
                 mtime = "unknown"
-            items += f'<li>&#128196; <a href="/wiki/{pname}">{html.escape(child.stem)}</a> <small style="color:#888">{mtime}</small></li>'
+            items += f'<li>&#128196; <a href="/wiki/{html.escape(pname)}">{html.escape(child.stem)}</a> <small style="color:#888">{mtime}</small></li>'
     return items + "</ul>"
 def files_section(ns: str) -> str:
     """Return collapsible HTML listing files attached to namespace ns."""
@@ -1051,7 +1065,7 @@ def sitemap(request: Request, _auth: None = Depends(require_auth)):
                     mtime = time.strftime("%Y-%m-%d", time.localtime(child.stat().st_mtime))
                 except OSError:
                     mtime = "unknown"
-                s += f'<li>&#128196; <a href="/wiki/{pname}">{html.escape(child.stem)}</a> <small style="color:#888">{mtime}</small></li>'
+                s += f'<li>&#128196; <a href="/wiki/{html.escape(pname)}">{html.escape(child.stem)}</a> <small style="color:#888">{mtime}</small></li>'
         return s + "</ul>"
     body = f'<div class="layout"><div class="content sitemap"><h1>Site Map</h1>{tree(PAGES_DIR, "")}</div></div>'
     return HTMLResponse(shell("Site Map", body, request=request))
@@ -1450,7 +1464,7 @@ def orphans(request: Request, _auth: None = Depends(require_auth)):
 
 # ── history / versioning routes ───────────────────────────────────────────────
 
-_SNAP_RE = re.compile(r"^\d{8}_\d{6}$")
+_SNAP_RE = re.compile(r"^\d{8}_\d{6}(_\d{6})?$")
 
 @app.get("/history/{name:path}", response_class=HTMLResponse)
 def history(request: Request, name: str, snap: str = "", _auth: None = Depends(require_auth)):
@@ -1475,7 +1489,7 @@ def history(request: Request, name: str, snap: str = "", _auth: None = Depends(r
             return HTMLResponse("Snapshot not found", 404)
         src = snap_file.read_text(encoding="utf-8")
         rendered, headings = parse(src, name, section_edit=False)
-        ts_display = f"{snap[:4]}-{snap[4:6]}-{snap[6:8]} {snap[9:11]}:{snap[11:13]}:{snap[13:15]} UTC"
+        ts_display = _snap_ts_to_display(snap)
         body = (f'<div class="layout"><div class="content">{breadcrumb(name)}'
                 f'<div class="toolbar" style="margin-bottom:.5rem">'
                 f'<a href="/history/{html.escape(name)}">&larr; History</a>'
@@ -1495,7 +1509,7 @@ def history(request: Request, name: str, snap: str = "", _auth: None = Depends(r
             if not _SNAP_RE.match(f.stem):
                 continue
             ts = f.stem
-            ts_display = f"{ts[:4]}-{ts[4:6]}-{ts[6:8]} {ts[9:11]}:{ts[11:13]}:{ts[13:15]} UTC"
+            ts_display = _snap_ts_to_display(ts)
             snaps.append((ts, ts_display))
     if not snaps:
         content = '<div class="notice">No history snapshots yet. Snapshots are created on each save once a previous version exists.</div>'
@@ -1513,7 +1527,7 @@ def history(request: Request, name: str, snap: str = "", _auth: None = Depends(r
         )
         content = (f'<table style="width:100%;border-collapse:collapse;border:1px solid #ddd">'
                    f'<tr style="background:#ecf0f1">'
-                   f'<th style="padding:.4rem .6rem;text-align:left">Timestamp (UTC)</th>'
+                   f'<th style="padding:.4rem .6rem;text-align:left">Timestamp ({html.escape(DISPLAY_TIMEZONE)})</th>'
                    f'<th style="padding:.4rem .6rem;text-align:left">View</th>'
                    f'<th style="padding:.4rem .6rem;text-align:left">Restore</th>'
                    f'</tr>{rows}</table>')
