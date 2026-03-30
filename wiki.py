@@ -37,8 +37,13 @@ app = FastAPI()
 
 # ── storage helpers ────────────────────────────────────────────────────────────
 
+def normalize_name(name: str) -> str:
+    """Replace spaces with underscores in each path segment (DokuWiki-style encoding)."""
+    return "/".join(seg.replace(" ", "_") for seg in name.strip("/").split("/"))
+
 def page_path(name: str) -> Path:
-    parts = name.strip("/").split("/")
+    name = normalize_name(name)
+    parts = name.split("/")
     for p in parts:
         if not re.fullmatch(r"[A-Za-z0-9_\-]+", p):
             raise ValueError(f"Invalid segment: {p!r}")
@@ -86,7 +91,8 @@ def file_path(ns: str, filename: str) -> Path:
 # ── attic / versioning helpers ────────────────────────────────────────────────
 
 def _attic_page_dir(name: str) -> Path:
-    parts = name.strip("/").split("/")
+    name = normalize_name(name)
+    parts = name.split("/")
     for p in parts:
         if not re.fullmatch(r"[A-Za-z0-9_\-]+", p):
             raise ValueError(f"Invalid segment: {p!r}")
@@ -245,6 +251,7 @@ def parse_inline(text: str, cur_ns: str = "") -> str:
             url = target.replace(":", "/")
         else:
             url = (cur_ns + "/" + target).lstrip("/") if cur_ns else target
+        url = normalize_name(url)
         lbl = label or html.escape(target.split(":")[-1])
         try:
             exists = page_path(url).exists()
@@ -1026,9 +1033,9 @@ async def add_todo(name: str, request: Request, _auth: None = Depends(require_au
 def new_page(request: Request, _auth: None = Depends(require_auth)):
     body = ('<div class="layout"><div class="content"><h1>New Page</h1>'
             '<p>Use <code>:</code> for namespaces, e.g. <code>projects:MyPage</code></p>'
-            '<form id="nf" onsubmit="event.preventDefault();location.href=\'/edit/\'+document.getElementById(\'ni\').value.replace(/:/g,\'/'+'\')">'
+            '<form id="nf" onsubmit="event.preventDefault();location.href=\'/edit/\'+document.getElementById(\'ni\').value.replace(/ /g,\'_\').replace(/:/g,\'/'+'\')">'
             '<input type="text" name="n" id="ni" style="width:100%;padding:.4rem;font-size:1rem;margin:.5rem 0"'
-            ' placeholder="PageName or ns:PageName" pattern="[A-Za-z0-9_\\-:]+" required><br>'
+            ' placeholder="PageName or ns:PageName" pattern="[A-Za-z0-9_ \\-:]+" required><br>'
             '<button type="submit">Create</button>'
             '</form></div></div>')
     return HTMLResponse(shell("New Page", body, request=request))
@@ -1036,10 +1043,11 @@ def new_page(request: Request, _auth: None = Depends(require_auth)):
 
 @app.get("/ns/{ns:path}", response_class=HTMLResponse)
 def ns_view(request: Request, ns: str, _auth: None = Depends(require_auth)):
-    for p in ns.strip("/").split("/"):
+    ns = normalize_name(ns)
+    for p in ns.split("/"):
         if not re.fullmatch(r"[A-Za-z0-9_\-]+", p):
             return HTMLResponse("Invalid namespace", 400)
-    ns_dir = PAGES_DIR.joinpath(*ns.strip("/").split("/"))
+    ns_dir = PAGES_DIR.joinpath(*ns.split("/"))
     if not ns_dir.is_dir():
         return HTMLResponse("Namespace not found", 404)
     ns_clean = ns.strip("/")
@@ -1286,10 +1294,11 @@ def _upload_page(ns: str, results: list | None, request: Request | None = None, 
 
 async def _do_upload(ns: str, files: list[UploadFile], request: Request | None = None, insert_pos: int = -1) -> HTMLResponse:
     if ns:
-        for seg in ns.strip("/").split("/"):
+        ns = normalize_name(ns)
+        for seg in ns.split("/"):
             if not re.fullmatch(r"[A-Za-z0-9_\-]+", seg):
                 return HTMLResponse("Invalid namespace", 400)
-    dest = (FILES_DIR.joinpath(*ns.strip("/").split("/")) if ns else FILES_DIR)
+    dest = (FILES_DIR.joinpath(*ns.split("/")) if ns else FILES_DIR)
     dest.mkdir(parents=True, exist_ok=True)
     results, total = [], 0
     for f in files:
