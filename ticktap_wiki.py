@@ -41,6 +41,8 @@ TODO_CYCLE_3STATE = False           # True = cycle [ ]→[x]→[~]→[ ]; False 
 
 ITEM_SPACING      = "0.00rem"        # vertical gap between todo items and list items (CSS length, e.g. "0.1rem", "0.5rem", "4px")
 
+INLINE_DELETE     = False             # show ❌ delete buttons on todo and list items in reader view
+
 # Page-name template for the /today redirect.  Uses wiki link notation (colons for namespaces),
 # same as [[ns:PageName]] in markup.  Available tokens:
 #   {yyyy}=4-digit year  {yy}=2-digit year
@@ -1152,9 +1154,9 @@ def view(request: Request, name: str, _auth: None = Depends(require_auth)):
         f'}});'
         f'newEl.appendChild(cb);'
         f'newEl.appendChild(document.createTextNode(" "+text));'
-        f'var _dl=document.createElement("a");_dl.className="line-del";_dl.href="#";'
+        + (f'var _dl=document.createElement("a");_dl.className="line-del";_dl.href="#";'
         f'_dl.dataset.line=data.line;_dl.dataset.name="{html.escape(name)}";_dl.textContent="\u274c";'
-        f'newEl.appendChild(document.createTextNode(" "));newEl.appendChild(_dl);'
+        f'newEl.appendChild(document.createTextNode(" "));newEl.appendChild(_dl);' if INLINE_DELETE else '') +
         f'var content=document.querySelector(".content");'
         f'if(_qtodoEl){{var anchor=_qtodoEl;while(anchor.parentElement&&anchor.parentElement!==content)anchor=anchor.parentElement;anchor.insertAdjacentElement("afterend",newEl);}}'
         f'else{{content.appendChild(newEl);}}'
@@ -1166,9 +1168,9 @@ def view(request: Request, name: str, _auth: None = Depends(require_auth)):
         f'newLi.dataset.indent=_qtodoIndent;'
         f'newLi.dataset.prefix=_qtodoPrefix;'
         f'newLi.appendChild(document.createTextNode(text));'
-        f'var _dl2=document.createElement("a");_dl2.className="line-del";_dl2.href="#";'
+        + (f'var _dl2=document.createElement("a");_dl2.className="line-del";_dl2.href="#";'
         f'_dl2.dataset.line=data.line;_dl2.dataset.name="{html.escape(name)}";_dl2.textContent="\u274c";'
-        f'newLi.appendChild(document.createTextNode(" "));newLi.appendChild(_dl2);'
+        f'newLi.appendChild(document.createTextNode(" "));newLi.appendChild(_dl2);' if INLINE_DELETE else '') +
         f'if(_qtodoEl){{_qtodoEl.insertAdjacentElement("afterend",newLi);}}'
         f'else{{var content2=document.querySelector(".content");if(content2)content2.appendChild(newLi);}}'
         f'newLi.style.background="rgba(39,174,96,.15)";'
