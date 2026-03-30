@@ -139,7 +139,8 @@ def _prune_attic(name: str):
             f.unlink(missing_ok=True)
             continue
         entries.append((dt, age, f))
-    # Keep only the newest snapshot younger than T (will age into a band on future saves).
+    # Keep only the oldest snapshot younger than T (it records the pre-edit state at the
+    # start of a rapid-edit session and ages into band 0 after T seconds).
     # For snapshots >= T, keep only the newest in each band [e^i*T, e^(i+1)*T).
     # Band i: floor(log(age / T)), capped at K-1.
     band_newest: dict[int, tuple] = {}
