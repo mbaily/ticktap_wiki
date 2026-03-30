@@ -558,7 +558,9 @@ textarea{width:100%;font-family:monospace;font-size:.95rem;padding:.5rem;border:
 .preview-box{margin-top:1rem;padding:1rem;border:1px dashed #aaa;border-radius:4px;background:#fff}
 .notice{background:#ffeeba;border:1px solid #ffc107;padding:.8rem 1rem;border-radius:4px;margin:1rem 0}
 .breadcrumb{font-size:.85rem;color:#666;margin-bottom:.5rem}.breadcrumb a{color:#2c3e50}
-input[type=checkbox]{cursor:pointer;width:1.1em;height:1.1em;vertical-align:middle;accent-color:#e74c3c}
+input[type=checkbox]{cursor:pointer;width:1.1em;height:1.1em;vertical-align:middle;-webkit-appearance:none;appearance:none;border:2px solid #e74c3c;border-radius:3px;background:#fff;position:relative}
+input[type=checkbox]:checked{background:#e74c3c;border-color:#e74c3c}
+input[type=checkbox]:checked::after{content:'';position:absolute;left:25%;top:5%;width:35%;height:60%;border:solid #fff;border-width:0 2px 2px 0;transform:rotate(45deg)}
 .todo-done{opacity:.6}
 .todo-inprogress{font-style:italic}.todo-inprogress>input[type=checkbox]{opacity:.7}
 .search-result{margin:.6rem 0;padding:.5rem;border:1px solid #ddd;border-radius:3px;background:#fff}
