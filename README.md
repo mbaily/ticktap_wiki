@@ -105,10 +105,8 @@ See [MARKUP.md](MARKUP.md) for the full reference.
 
 ## Requirements
 
-- Python 3.11+
-- `pip install fastapi uvicorn`
-- `pip install bcrypt` (if using authentication)
-- `pip install cryptography` (if generating self-signed certs)
+- Python 3.13+
+- See requirements.txt
 
 ## License
 

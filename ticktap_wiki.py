@@ -43,6 +43,9 @@ ITEM_SPACING      = "0.00rem"        # vertical gap between todo items and list 
 
 INLINE_DELETE     = False             # show ❌ delete buttons on todo and list items in reader view
 
+SECTION_EDIT_MIN  = 1              # minimum heading level to show [edit] section buttons (1 = h1 = ======)
+SECTION_EDIT_MAX  = 3              # maximum heading level to show [edit] section buttons (5 = h5 = ==)
+
 # Page-name template for the /today redirect.  Uses wiki link notation (colons for namespaces),
 # same as [[ns:PageName]] in markup.  Available tokens:
 #   {yyyy}=4-digit year  {yy}=2-digit year
@@ -353,7 +356,7 @@ def parse(src: str, name: str = "", section_edit: bool = True) -> tuple[str, lis
     out, headings, list_stack = [], [], []
     cur_ns = "/".join(name.split("/")[:-1])
     in_code, code_lang, code_lines = False, "", []
-    h2_count = 0
+    sect_count = 0
     seen_anchors: dict[str, int] = {}
     table_rows: list = []
     para_lines: list = []  # (source_line_idx, rendered_html) — current paragraph accumulator
@@ -425,9 +428,9 @@ def parse(src: str, name: str = "", section_edit: bool = True) -> tuple[str, lis
                 anchor = base_anchor
             headings.append((level, text, anchor))
             edit_btn = ""
-            if level == 2 and section_edit and name:
-                edit_btn = f' <a class="sect-edit" href="/sect/{name}/{h2_count}">[edit]</a>'
-                h2_count += 1
+            if SECTION_EDIT_MIN <= level <= SECTION_EDIT_MAX and section_edit and name:
+                edit_btn = f' <a class="sect-edit" href="/sect/{name}/{sect_count}">[edit]</a>'
+                sect_count += 1
             out.append(f'<h{level} id="{anchor}" data-line="{i + meta_offset}">{html.escape(text)}{edit_btn}</h{level}>')
             continue
 
@@ -510,23 +513,44 @@ def parse(src: str, name: str = "", section_edit: bool = True) -> tuple[str, lis
     return "\n".join(out), headings
 
 
-def split_sections(src: str) -> list[str]:
-    """Split on ===== Title ===== (h2) headings, keeping the heading with its
-    content. Only fully-formed symmetric headings are split points, matching the
-    same pattern that parse() uses. Lines inside fenced code blocks are ignored."""
-    # Matches a complete h2 heading (===== ... =====) or a ``` fence toggle
-    MARKER = re.compile(r"(?m)^(```|===== .+? =====\s*$)")
-    parts = []
-    last = 0
+def find_editable_sections(src: str, min_level: int = 1, max_level: int = 3) -> list[tuple[int, int, int]]:
+    """Find hierarchical editable sections in wiki source.
+
+    Returns a list of (level, start_line, end_line) for each editable heading.
+    lines[start_line:end_line] gives the heading and all content underneath it
+    until the next heading of equal or higher importance (lower or equal level
+    number), considering ALL headings — not just editable ones — as potential
+    boundaries.  Headings inside fenced code blocks are ignored.
+    """
+    lines = src.split("\n")
+    all_headings: list[tuple[int, int]] = []   # (level, line_index)
+    editable_indices: list[int] = []           # indices into all_headings
     in_code = False
-    for m in MARKER.finditer(src):
-        if m.group(1).startswith("```"):
+
+    for i, line in enumerate(lines):
+        if line.startswith("```"):
             in_code = not in_code
-        elif not in_code and m.start() != last:
-            parts.append(src[last:m.start()])
-            last = m.start()
-    parts.append(src[last:])
-    return parts if parts else [src]
+            continue
+        if in_code:
+            continue
+        hm = re.fullmatch(r"(={2,6}) (.+?) \1", line.rstrip())
+        if hm:
+            level = 7 - len(hm.group(1))
+            all_headings.append((level, i))
+            if min_level <= level <= max_level:
+                editable_indices.append(len(all_headings) - 1)
+
+    sections: list[tuple[int, int, int]] = []
+    for ei in editable_indices:
+        level, start = all_headings[ei]
+        end = len(lines)
+        # End at the next heading of equal or higher importance (any heading, not just editable)
+        for j in range(ei + 1, len(all_headings)):
+            if all_headings[j][0] <= level:
+                end = all_headings[j][1]
+                break
+        sections.append((level, start, end))
+    return sections
 
 # ── CSS / JS ───────────────────────────────────────────────────────────────────
 
@@ -1245,11 +1269,12 @@ def edit_section_get(request: Request, name: str, idx: int, _auth: None = Depend
         src = read_page(name) or ""
     except ValueError:
         return HTMLResponse("Invalid page name", 400)
-    sections = split_sections(src)
-    h2s = [s for s in sections if s.startswith("===== ")]
-    if idx >= len(h2s):
+    sections = find_editable_sections(src, SECTION_EDIT_MIN, SECTION_EDIT_MAX)
+    if idx >= len(sections):
         return HTMLResponse("Section not found", 400)
-    content = html.escape(h2s[idx])
+    _level, start_line, end_line = sections[idx]
+    src_lines = src.split("\n")
+    content = html.escape("\n".join(src_lines[start_line:end_line]))
     body = (f'<div class="layout"><div class="content">{breadcrumb(name)}'
             f'<h2>Edit section</h2>'
             f'<form method="post"><div class="edit-toolbar">'
@@ -1269,15 +1294,15 @@ async def edit_section_post(name: str, idx: int, content: str = Form(""), _auth:
         src = read_page(name) or ""
     except ValueError:
         return HTMLResponse("Invalid page name", 400)
-    sections = split_sections(src)
-    h2_indices = [i for i, s in enumerate(sections) if s.startswith("===== ")]
-    if idx >= len(h2_indices):
+    sections = find_editable_sections(src, SECTION_EDIT_MIN, SECTION_EDIT_MAX)
+    if idx >= len(sections):
         return HTMLResponse("Section not found", 400)
-    sections[h2_indices[idx]] = content
-    # Ensure removed sections end with \n so the next heading stays on its own line
-    sections = [s if s.endswith("\n") else s + "\n" for s in sections[:-1]] + [sections[-1]]
+    _level, start_line, end_line = sections[idx]
+    src_lines = src.split("\n")
+    new_content = content.replace("\r\n", "\n").replace("\r", "\n")
+    src_lines[start_line:end_line] = new_content.split("\n")
     try:
-        write_page(name, "".join(sections))
+        write_page(name, "\n".join(src_lines))
     except OSError:
         return HTMLResponse("Save failed", 500)
     return RedirectResponse(f"/wiki/{name}", status_code=303)
