@@ -1274,19 +1274,24 @@ def edit_section_get(request: Request, name: str, idx: int, _auth: None = Depend
         return HTMLResponse("Section not found", 400)
     _level, start_line, end_line = sections[idx]
     src_lines = src.split("\n")
+    # Compute the anchor so cancel and save redirect back to this section
+    hm = re.fullmatch(r"(={2,6}) (.+?) \1", src_lines[start_line].rstrip())
+    anchor = slug(hm.group(2)) if hm else ""
     content = html.escape("\n".join(src_lines[start_line:end_line]))
+    frag = f"#{anchor}" if anchor else ""
     body = (f'<div class="layout"><div class="content">{breadcrumb(name)}'
             f'<h2>Edit section</h2>'
             f'<form method="post"><div class="edit-toolbar">'
             f'<button type="submit">Save section</button>'
-            f'<a href="/wiki/{name}">Cancel</a></div>'
+            f'<a href="/wiki/{name}{frag}">Cancel</a></div>'
             f'<textarea name="content" rows="20">{content}</textarea>'
+            f'<input type="hidden" name="anchor" value="{html.escape(anchor)}">'
             f'</form></div></div>')
     return HTMLResponse(shell(f"Edit section \u2014 {name}", body, request=request))
 
 
 @app.post("/sect/{name:path}/{idx}", response_class=HTMLResponse)
-async def edit_section_post(name: str, idx: int, content: str = Form(""), _auth: None = Depends(require_auth)):
+async def edit_section_post(name: str, idx: int, content: str = Form(""), anchor: str = Form(""), _auth: None = Depends(require_auth)):
     name = normalize_name(name)
     if idx < 0:
         return HTMLResponse("Section not found", 400)
@@ -1301,11 +1306,15 @@ async def edit_section_post(name: str, idx: int, content: str = Form(""), _auth:
     src_lines = src.split("\n")
     new_content = content.replace("\r\n", "\n").replace("\r", "\n")
     src_lines[start_line:end_line] = new_content.split("\n")
+    # Recompute anchor from the saved content in case the heading was renamed
+    new_lines = new_content.split("\n")
+    hm = re.fullmatch(r"(={2,6}) (.+?) \1", new_lines[0].rstrip()) if new_lines else None
+    frag = f"#{slug(hm.group(2))}" if hm else (f"#{anchor}" if anchor else "")
     try:
         write_page(name, "\n".join(src_lines))
     except OSError:
         return HTMLResponse("Save failed", 500)
-    return RedirectResponse(f"/wiki/{name}", status_code=303)
+    return RedirectResponse(f"/wiki/{name}{frag}", status_code=303)
 
 
 @app.get("/edit/{name:path}", response_class=HTMLResponse)
