@@ -316,7 +316,10 @@ def parse(src: str, name: str = "", section_edit: bool = True) -> tuple[str, lis
 
     def close_lists():
         while list_stack:
-            out.append(f"</{list_stack.pop()[1]}>")
+            entry = list_stack.pop()
+            if entry[1]:   # parent <li> was left open for this sub-list
+                out.append("</li>")
+            out.append(f"</{entry[0]}>")
 
     def close_table():
         if not table_rows:
@@ -399,12 +402,30 @@ def parse(src: str, name: str = "", section_edit: bool = True) -> tuple[str, lis
             indent = max(0, len(lm.group(1)) // 2 - 1)
             tag = "ul" if lm.group(2) == "*" else "ol"
             text = parse_inline(lm.group(3), cur_ns)
+            # Pop stacks that are too deep
             while len(list_stack) > indent + 1:
-                out.append(f"</{list_stack.pop()[1]}>")
-            if list_stack and list_stack[-1][1] != tag and len(list_stack) == indent + 1:
-                out.append(f"</{list_stack.pop()[1]}>")
+                entry = list_stack.pop()
+                if entry[1]:
+                    out.append("</li>")
+                out.append(f"</{entry[0]}>")
+            # Switch list type at same level
+            if list_stack and list_stack[-1][0] != tag and len(list_stack) == indent + 1:
+                entry = list_stack.pop()
+                if entry[1]:
+                    out.append("</li>")
+                out.append(f"</{entry[0]}>")
+            # If returning to a level where a <li> was left open for nesting, close it
+            if list_stack and list_stack[-1][1]:
+                out.append("</li>")
+                list_stack[-1][1] = False
+            # Push new depth levels — nest <ul>/<ol> inside the last <li> when going deeper
             while len(list_stack) <= indent:
-                list_stack.append((len(list_stack), tag)); out.append(f"<{tag}>")
+                if list_stack and out and out[-1].endswith("</li>"):
+                    # Strip the closing </li> so the sub-list lives inside it
+                    list_stack[-1][1] = True
+                    out[-1] = out[-1][:-5]
+                list_stack.append([tag, False])
+                out.append(f"<{tag}>")
             li_indent = len(lm.group(1))
             li_prefix = lm.group(2) + " "
             out.append(f'<li data-line="{i + meta_offset}" data-indent="{li_indent}" data-prefix="{li_prefix}">{text}</li>')
@@ -466,6 +487,8 @@ h2{border-bottom:1px solid #ddd;padding-bottom:.2rem;display:flex;justify-conten
 p{margin:.4rem 0}pre{background:#f4f4f4;padding:.8rem;border-radius:4px;overflow-x:auto;margin:.5rem 0}
 code{background:#f0f0f0;padding:0 .3rem;border-radius:3px;font-size:.9em}pre code{background:none;padding:0}
 hr{border:none;border-top:1px solid #ddd;margin:1rem 0}
+.content ul,.content ol{padding-left:1.5em;margin:.3rem 0}
+.content li{margin:.1rem 0}
 .wiki-table{border-collapse:collapse;margin:.8rem 0;width:auto;max-width:100%}
 .wiki-table td,.wiki-table th{border:1px solid #ddd;padding:.4rem .6rem;text-align:left;vertical-align:top}
 .wiki-table th{background:#ecf0f1;font-weight:bold}
