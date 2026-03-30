@@ -439,7 +439,8 @@ def parse(src: str, name: str = "", section_edit: bool = True) -> tuple[str, lis
             checked = " checked" if state == "x" else ""
             state_cls = " todo-done" if state == "x" else (" todo-inprogress" if state == "~" else "")
             indent_style = f' style="padding-left:{todo_level * 1.5}em"' if todo_level else ''
-            out.append(f'<p class="todo{state_cls}" draggable="true" data-line="{i + meta_offset}" data-state="{state}" data-indent="{todo_indent}" data-prefix="[ ] "{indent_style}><input type="checkbox"{checked} data-line="{i + meta_offset}" data-name="{html.escape(name)}"> {text}</p>')
+            del_btn = f' <a class="line-del" href="#" data-line="{i + meta_offset}" data-name="{html.escape(name)}">\u274c</a>' if section_edit and name else ''
+            out.append(f'<p class="todo{state_cls}" draggable="true" data-line="{i + meta_offset}" data-state="{state}" data-indent="{todo_indent}" data-prefix="[ ] "{indent_style}><input type="checkbox"{checked} data-line="{i + meta_offset}" data-name="{html.escape(name)}"> {text}{del_btn}</p>')
             continue
 
         # table rows — DokuWiki syntax: lines starting with | or ^
@@ -484,7 +485,8 @@ def parse(src: str, name: str = "", section_edit: bool = True) -> tuple[str, lis
                 out.append(f"<{tag}>")
             li_indent = len(lm.group(1))
             li_prefix = lm.group(2) + " "
-            out.append(f'<li data-line="{i + meta_offset}" data-indent="{li_indent}" data-prefix="{li_prefix}">{text}</li>')
+            del_btn = f' <a class="line-del" href="#" data-line="{i + meta_offset}" data-name="{html.escape(name)}">\u274c</a>' if section_edit and name else ''
+            out.append(f'<li data-line="{i + meta_offset}" data-indent="{li_indent}" data-prefix="{li_prefix}">{text}{del_btn}</li>')
             continue
 
         close_table()
@@ -602,6 +604,7 @@ mark{background:#fff3cd;padding:0 .1rem;border-radius:2px}
 .pin-bar{background:#243447;padding:.3rem 1rem;display:flex;gap:.5rem;flex-wrap:wrap;align-items:center;font-size:.85rem}
 .pin-bar a{color:#8ab4f8;text-decoration:none;background:rgba(255,255,255,.08);padding:.15rem .5rem;border-radius:3px}.pin-bar a:hover{text-decoration:underline}
 p.todo[draggable]{cursor:grab}p.todo.drag-over-before{border-top:2px solid #3498db}p.todo.drag-over-after{border-bottom:2px solid #3498db}
+.line-del{font-size:.7rem;color:#c0392b;text-decoration:none;margin-left:.4rem;opacity:.3;vertical-align:middle}.line-del:hover{opacity:1}
 """
 
 CSS_DARK = """
@@ -642,6 +645,7 @@ mark{background:#5a4a00;color:#ffd}
 input[type=checkbox]{background:#1a1a2e;border-color:#e74c3c}
 input[type=checkbox]:checked{background:#e74c3c;border-color:#e74c3c}
 input[type=checkbox]:checked::after{border-color:#fff}
+.line-del{color:#f87171}
 """
 
 JS = """
@@ -663,6 +667,20 @@ document.querySelectorAll('textarea').forEach(ta=>{
       e.target.value=e.target.value.slice(0,s)+'  '+e.target.value.slice(e.target.selectionEnd);
       e.target.selectionStart=e.target.selectionEnd=s+2;}
   });
+});
+document.addEventListener('click',function(e){
+  var a=e.target.closest('a.line-del');if(!a)return;
+  e.preventDefault();e.stopPropagation();
+  var line=parseInt(a.dataset.line,10),name=a.dataset.name,el=a.closest('p.todo,li');
+  fetch('/delete-line/'+encodeURIComponent(name)+'/'+line,{method:'POST'})
+    .then(function(r){return r.json();})
+    .then(function(data){
+      if(!data.ok){alert(data.error||'Delete failed');return;}
+      if(el)el.remove();
+      document.querySelectorAll('[data-line]').forEach(function(se){
+        var dl=parseInt(se.dataset.line,10);if(dl>line)se.dataset.line=dl-1;
+      });
+    }).catch(function(){alert('Network error');});
 });
 """
 
@@ -1121,6 +1139,9 @@ def view(request: Request, name: str, _auth: None = Depends(require_auth)):
         f'}});'
         f'newEl.appendChild(cb);'
         f'newEl.appendChild(document.createTextNode(" "+text));'
+        f'var _dl=document.createElement("a");_dl.className="line-del";_dl.href="#";'
+        f'_dl.dataset.line=data.line;_dl.dataset.name="{html.escape(name)}";_dl.textContent="\u274c";'
+        f'newEl.appendChild(document.createTextNode(" "));newEl.appendChild(_dl);'
         f'var content=document.querySelector(".content");'
         f'if(_qtodoEl){{var anchor=_qtodoEl;while(anchor.parentElement&&anchor.parentElement!==content)anchor=anchor.parentElement;anchor.insertAdjacentElement("afterend",newEl);}}'
         f'else{{content.appendChild(newEl);}}'
@@ -1131,7 +1152,10 @@ def view(request: Request, name: str, _auth: None = Depends(require_auth)):
         f'newLi.dataset.line=data.line;'
         f'newLi.dataset.indent=_qtodoIndent;'
         f'newLi.dataset.prefix=_qtodoPrefix;'
-        f'newLi.textContent=text;'
+        f'newLi.appendChild(document.createTextNode(text));'
+        f'var _dl2=document.createElement("a");_dl2.className="line-del";_dl2.href="#";'
+        f'_dl2.dataset.line=data.line;_dl2.dataset.name="{html.escape(name)}";_dl2.textContent="\u274c";'
+        f'newLi.appendChild(document.createTextNode(" "));newLi.appendChild(_dl2);'
         f'if(_qtodoEl){{_qtodoEl.insertAdjacentElement("afterend",newLi);}}'
         f'else{{var content2=document.querySelector(".content");if(content2)content2.appendChild(newLi);}}'
         f'newLi.style.background="rgba(39,174,96,.15)";'
@@ -1375,6 +1399,31 @@ async def add_todo(name: str, request: Request, _auth: None = Depends(require_au
     except OSError:
         return JSONResponse({"ok": False, "error": "Save failed"}, status_code=500)
     return JSONResponse({"ok": True, "line": insert_at})
+
+
+@app.post("/delete-line/{name:path}/{line}")
+async def delete_line(name: str, line: int, _auth: None = Depends(require_auth)):
+    name = normalize_name(name)
+    if line < 0:
+        return JSONResponse({"ok": False, "error": "Invalid line"}, status_code=400)
+    try:
+        src = read_page(name)
+    except ValueError:
+        return JSONResponse({"ok": False, "error": "Invalid page name"}, status_code=400)
+    if src is None:
+        return JSONResponse({"ok": False, "error": "Not found"}, status_code=404)
+    lines = src.splitlines(keepends=True)
+    if line >= len(lines):
+        return JSONResponse({"ok": False, "error": "Out of range"}, status_code=400)
+    ln = lines[line].rstrip("\r\n")
+    if not re.match(r"^\s*\[[ x~]\] ", ln) and not re.match(r"^ {2,}[*\-] ", ln):
+        return JSONResponse({"ok": False, "error": "Not a todo or list item"}, status_code=400)
+    del lines[line]
+    try:
+        write_page(name, "".join(lines), snapshot=False)
+    except OSError:
+        return JSONResponse({"ok": False, "error": "Save failed"}, status_code=500)
+    return JSONResponse({"ok": True, "deleted_line": line})
 
 
 @app.get("/new", response_class=HTMLResponse)

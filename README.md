@@ -10,6 +10,7 @@ Most wikis are designed for desktops and long-form documentation. TickTap is bui
 
 - **Tap a checkbox** to toggle a task done — no edit mode, no save button
 - **Quick-add tasks** click or mobile tap a todo or list item, get a floating text box — type and hit Enter. No edit mode, no save button.
+- **Inline delete** — tap ❌ next to any todo or list item to remove it instantly, no page reload
 - **Drag to reorder** your todo list with mouse (desktop only)
 - **Daily journal pages** — tap "Today" to jump straight to your current task list
 - **Aims to works on any phone browser** — responsive layout, big tap targets, no app install needed
@@ -19,6 +20,7 @@ Most wikis are designed for desktops and long-form documentation. TickTap is bui
 - **Single-file server** — `python ticktap_wiki.py` and you're running
 - **Togglable checkboxes** — `[ ]`, `[x]`, `[~]` cycle states with a tap, saved instantly
 - **Quick-add bar** — tap any task, then add a new one right after it
+- **Inline delete** — ❌ on each todo and list item removes the line instantly via JS + server, no reload
 - **Drag-and-drop reorder** — rearrange todos without opening the editor
 - **DokuWiki-compatible markup** — headings, lists, tables, bold/italic, links, code blocks
 - **Section editing** — edit just one section without touching the rest of the page
