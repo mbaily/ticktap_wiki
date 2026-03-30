@@ -875,8 +875,8 @@ def toc_html(headings: list) -> str:
         f'<li class="h{lvl}"><a href="#{anc}">{html.escape(txt)}</a></li>'
         for lvl, txt, anc in headings
     )
-    return (f'<div class="toc"><h3>Contents '
-            f'<button onclick="var u=this.closest(\'.toc\').querySelector(\'ul\');u.style.display=u.style.display===\'none\'?\'block\':\'none\'">&#177;</button>'
+    return (f'<div class="toc"><h3 style="cursor:pointer" onclick="var u=this.closest(\'.toc\').querySelector(\'ul\');u.style.display=u.style.display===\'none\'?\'block\':\'none\'">Contents '
+            f'<button onclick="event.stopPropagation();var u=this.closest(\'.toc\').querySelector(\'ul\');u.style.display=u.style.display===\'none\'?\'block\':\'none\'">&#177;</button>'
             f'</h3><ul>{items}</ul></div>')
 
 def dir_listing(d: Path, prefix: str) -> str:
