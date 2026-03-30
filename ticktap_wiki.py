@@ -43,8 +43,8 @@ ITEM_SPACING      = "0.00rem"        # vertical gap between todo items and list 
 
 INLINE_DELETE     = False             # show ❌ delete buttons on todo and list items in reader view
 
-SECTION_EDIT_MIN  = 1              # minimum heading level to show [edit] section buttons (1 = h1 = ======)
-SECTION_EDIT_MAX  = 3              # maximum heading level to show [edit] section buttons (5 = h5 = ==)
+SECTION_EDIT_MIN  = 1              # minimum heading level to show [edit] section buttons (1 is h1 is ======)
+SECTION_EDIT_MAX  = 4              # maximum heading level to show [edit] section buttons (5 is h5 is ==)
 
 # Page-name template for the /today redirect.  Uses wiki link notation (colons for namespaces),
 # same as [[ns:PageName]] in markup.  Available tokens:
