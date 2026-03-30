@@ -1397,7 +1397,8 @@ async def toggle(request: Request, name: str, line: int, _auth: None = Depends(r
     except OSError:
         return HTMLResponse("write failed", 500)
     # Return the new state character so the client can update the DOM
-    new_state = _cycle.get(re.search(r"\[([ x~])\]", ln).group(1), " ") if re.search(r"\[([ x~])\]", ln) else " "
+    m = re.search(r"\[([ x~])\]", ln)
+    new_state = _cycle.get(m.group(1), " ") if m else " "
     return HTMLResponse(new_state)
 
 
