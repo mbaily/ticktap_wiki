@@ -587,6 +587,9 @@ input[type=checkbox]:checked::after{content:'';position:absolute;left:25%;top:5%
   .content{padding:.7rem}
   .login-box{margin:1rem auto;padding:1.2rem}
   input[type=checkbox]{width:1.4em;height:1.4em}
+  p.todo[draggable]{cursor:default;-webkit-user-drag:none}
+  p.todo.drag-over-before{border-top:none!important}
+  p.todo.drag-over-after{border-bottom:none!important}
 }
 .tag-pill{display:inline-block;background:#e8f4f8;color:#2c3e50;border-radius:10px;padding:.1rem .5rem;font-size:.8rem;text-decoration:none;margin:.1rem .1rem;vertical-align:middle}
 .tag-pill:hover{background:#d0e8f0}
