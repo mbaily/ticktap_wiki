@@ -73,6 +73,7 @@ Edit the `# ── config ──` block at the top of `ticktap_wiki.py`:
 | `HTTPS_ENABLED` | `True` | Enable TLS |
 | `DARK_MODE` | `True` | Dark colour scheme |
 | `TODO_CYCLE_3STATE` | `False` | `True` = cycle `[ ]→[x]→[~]→[ ]`; `False` = toggle `[ ]↔[x]` |
+| `ITEM_SPACING` | `"0.25rem"` | Vertical gap between todo items and list items (any CSS length) |
 | `JOURNAL_PAGE_FORMAT` | `"Todo {yyyy} {mmmm}"` | Template for the "Today" button |
 | `DISPLAY_TIMEZONE` | `"Australia/Melbourne"` | Timezone for history timestamps |
 

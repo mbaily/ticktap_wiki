@@ -39,6 +39,8 @@ LINEBREAK_ON_NEWLINE = True        # set True to render a single newline as <br>
 
 TODO_CYCLE_3STATE = False           # True = cycle [ ]→[x]→[~]→[ ]; False = toggle [ ]↔[x] only (no in-progress state)
 
+ITEM_SPACING      = "0.00rem"        # vertical gap between todo items and list items (CSS length, e.g. "0.1rem", "0.5rem", "4px")
+
 # Page-name template for the /today redirect.  Uses wiki link notation (colons for namespaces),
 # same as [[ns:PageName]] in markup.  Available tokens:
 #   {yyyy}=4-digit year  {yy}=2-digit year
@@ -548,7 +550,8 @@ p{margin:.8rem 0}pre{background:#f4f4f4;padding:.8rem;border-radius:4px;overflow
 code{background:#f0f0f0;padding:0 .3rem;border-radius:3px;font-size:.9em}pre code{background:none;padding:0}
 hr{border:none;border-top:1px solid #ddd;margin:1rem 0}
 .content ul,.content ol{padding-left:1.5em;margin:.3rem 0}
-.content li{margin:.1rem 0}
+.content li{margin:__ITEM_SP__ 0}
+p.todo{margin:__ITEM_SP__ 0}
 .wiki-table{border-collapse:collapse;margin:.8rem 0;width:auto;max-width:100%}
 .wiki-table td,.wiki-table th{border:1px solid #ddd;padding:.4rem .6rem;text-align:left;vertical-align:top}
 .wiki-table th{background:#ecf0f1;font-weight:bold}
@@ -572,7 +575,7 @@ input[type=checkbox]:checked::after{content:'';position:absolute;left:25%;top:5%
 .sitemap ul{list-style:none;padding-left:1.2rem}.sitemap>ul{padding-left:0}
 .broken-file{color:#c0392b;font-style:italic}
 .content img{max-width:100%;height:auto}
-.content [data-line]:hover{box-shadow:inset 3px 0 0 #3498db}
+.content [data-line]:hover:not(.line-del){box-shadow:inset 3px 0 0 #3498db}
 .content [data-line].qtodo-sel{outline:2px solid #3498db;outline-offset:2px;border-radius:2px;background:rgba(52,152,219,.07)}
 .login-box{max-width:360px;margin:3rem auto;background:#fff;border:1px solid #ddd;border-radius:6px;padding:2rem}
 .login-box h1{font-size:1.3rem;margin-bottom:1rem}
@@ -604,7 +607,8 @@ mark{background:#fff3cd;padding:0 .1rem;border-radius:2px}
 .pin-bar{background:#243447;padding:.3rem 1rem;display:flex;gap:.5rem;flex-wrap:wrap;align-items:center;font-size:.85rem}
 .pin-bar a{color:#8ab4f8;text-decoration:none;background:rgba(255,255,255,.08);padding:.15rem .5rem;border-radius:3px}.pin-bar a:hover{text-decoration:underline}
 p.todo[draggable]{cursor:grab}p.todo.drag-over-before{border-top:2px solid #3498db}p.todo.drag-over-after{border-bottom:2px solid #3498db}
-.line-del{font-size:.7rem;color:#c0392b;text-decoration:none;margin-left:.4rem;opacity:.3;vertical-align:middle}.line-del:hover{opacity:1}
+.line-del{font-size:.7rem;color:#c0392b;text-decoration:none;margin-left:.4rem;opacity:.3;vertical-align:middle;position:relative;top:-.2em}.line-del:hover{opacity:1}
+.line-del.confirm{opacity:1;font-size:.75rem;background:#c0392b;color:#fff;padding:.1rem .4rem;border-radius:3px}
 """
 
 CSS_DARK = """
@@ -646,6 +650,7 @@ input[type=checkbox]{background:#1a1a2e;border-color:#e74c3c}
 input[type=checkbox]:checked{background:#e74c3c;border-color:#e74c3c}
 input[type=checkbox]:checked::after{border-color:#fff}
 .line-del{color:#f87171}
+.line-del.confirm{background:#c0392b;color:#fff}
 """
 
 JS = """
@@ -671,16 +676,23 @@ document.querySelectorAll('textarea').forEach(ta=>{
 document.addEventListener('click',function(e){
   var a=e.target.closest('a.line-del');if(!a)return;
   e.preventDefault();e.stopPropagation();
+  if(!a.classList.contains('confirm')){
+    a.classList.add('confirm');a._origText=a.textContent;a.textContent='delete?';
+    a._cTimer=setTimeout(function(){a.classList.remove('confirm');a.textContent=a._origText;},3000);
+    return;
+  }
+  clearTimeout(a._cTimer);
   var line=parseInt(a.dataset.line,10),name=a.dataset.name,el=a.closest('p.todo,li');
+  if(el){el.style.transition='opacity .25s';el.style.opacity='0';}
   fetch('/delete-line/'+encodeURIComponent(name)+'/'+line,{method:'POST'})
     .then(function(r){return r.json();})
     .then(function(data){
-      if(!data.ok){alert(data.error||'Delete failed');return;}
+      if(!data.ok){alert(data.error||'Delete failed');if(el){el.style.opacity='';}return;}
       if(el)el.remove();
       document.querySelectorAll('[data-line]').forEach(function(se){
         var dl=parseInt(se.dataset.line,10);if(dl>line)se.dataset.line=dl-1;
       });
-    }).catch(function(){alert('Network error');});
+    }).catch(function(){alert('Network error');if(el){el.style.opacity='';}});
 });
 """
 
@@ -748,10 +760,11 @@ def shell(title: str, body: str, search_q: str = "", request: Request | None = N
         if username is None:
             username = _validate_token(_get_token(request)) or ""
     dark = f'<style>{CSS_DARK}</style>' if DARK_MODE else ""
+    css = CSS.replace('__ITEM_SP__', ITEM_SPACING)
     return (f'<!doctype html><html lang="en"><head><meta charset="utf-8">'
             f'<meta name="viewport" content="width=device-width,initial-scale=1">'
             f'<title>{html.escape(title)} \u2014 {html.escape(SITE_TITLE)}</title>'
-            f'<style>{CSS}</style>{dark}</head><body>'
+            f'<style>{css}</style>{dark}</head><body>'
             f'{nav_bar(search_q, username)}{pins_bar(request)}{body}'
             f'<script>{JS}</script></body></html>')
 
@@ -1586,7 +1599,7 @@ def _login_page(next_url: str, error: str = "") -> HTMLResponse:
     dark = f'<style>{CSS_DARK}</style>' if DARK_MODE else ""
     return HTMLResponse(f'<!doctype html><html lang="en"><head><meta charset="utf-8">'
                         f'<meta name="viewport" content="width=device-width,initial-scale=1">'
-                        f'<title>Login \u2014 {html.escape(SITE_TITLE)}</title><style>{CSS}</style>{dark}</head>'
+                        f'<title>Login \u2014 {html.escape(SITE_TITLE)}</title><style>{CSS.replace("__ITEM_SP__", ITEM_SPACING)}</style>{dark}</head>'
                         f'<body>{body}</body></html>')
 
 @app.get("/login", response_class=HTMLResponse)
