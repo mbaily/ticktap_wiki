@@ -552,6 +552,34 @@ def find_editable_sections(src: str, min_level: int = 1, max_level: int = 3) -> 
         sections.append((level, start, end))
     return sections
 
+def _compute_anchor_for_line(src: str, target_line: int) -> str:
+    """Compute the deduplicated anchor that parse() would assign to the heading at target_line.
+
+    Replicates the same seen_anchors logic used in parse() so that duplicate
+    heading names get the correct -2, -3, … suffix.
+    """
+    lines = src.split("\n")
+    seen_anchors: dict[str, int] = {}
+    in_code = False
+    for i, line in enumerate(lines):
+        if line.startswith("```"):
+            in_code = not in_code
+            continue
+        if in_code:
+            continue
+        hm = re.fullmatch(r"(={2,6}) (.+?) \1", line.rstrip())
+        if hm:
+            base_anchor = slug(hm.group(2))
+            if base_anchor in seen_anchors:
+                seen_anchors[base_anchor] += 1
+                anchor = f"{base_anchor}-{seen_anchors[base_anchor]}"
+            else:
+                seen_anchors[base_anchor] = 1
+                anchor = base_anchor
+            if i == target_line:
+                return anchor
+    return ""
+
 # ── CSS / JS ───────────────────────────────────────────────────────────────────
 
 CSS = """
@@ -1274,9 +1302,8 @@ def edit_section_get(request: Request, name: str, idx: int, _auth: None = Depend
         return HTMLResponse("Section not found", 400)
     _level, start_line, end_line = sections[idx]
     src_lines = src.split("\n")
-    # Compute the anchor so cancel and save redirect back to this section
-    hm = re.fullmatch(r"(={2,6}) (.+?) \1", src_lines[start_line].rstrip())
-    anchor = slug(hm.group(2)) if hm else ""
+    # Compute the deduplicated anchor so cancel and save redirect back to this section
+    anchor = _compute_anchor_for_line(src, start_line)
     content = html.escape("\n".join(src_lines[start_line:end_line]))
     frag = f"#{anchor}" if anchor else ""
     body = (f'<div class="layout"><div class="content">{breadcrumb(name)}'
@@ -1306,10 +1333,10 @@ async def edit_section_post(name: str, idx: int, content: str = Form(""), anchor
     src_lines = src.split("\n")
     new_content = content.replace("\r\n", "\n").replace("\r", "\n")
     src_lines[start_line:end_line] = new_content.split("\n")
-    # Recompute anchor from the saved content in case the heading was renamed
-    new_lines = new_content.split("\n")
-    hm = re.fullmatch(r"(={2,6}) (.+?) \1", new_lines[0].rstrip()) if new_lines else None
-    frag = f"#{slug(hm.group(2))}" if hm else (f"#{anchor}" if anchor else "")
+    # Recompute deduplicated anchor from the full new source
+    new_src = "\n".join(src_lines)
+    new_anchor = _compute_anchor_for_line(new_src, start_line)
+    frag = f"#{new_anchor}" if new_anchor else (f"#{anchor}" if anchor else "")
     try:
         write_page(name, "\n".join(src_lines))
     except OSError:
