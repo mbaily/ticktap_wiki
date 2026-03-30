@@ -2037,7 +2037,7 @@ def history(request: Request, name: str, snap: str = "", view: str = "", _auth: 
         show_source = (view == "source")
         if show_source:
             toggle_link = f'<a href="/history/{name_esc}?snap={snap_esc}">View Rendered</a>'
-            content_html = f'<pre style="white-space:pre-wrap;word-wrap:break-word;background:#f8f8f8;border:1px solid #ddd;padding:1rem;font-family:monospace;font-size:.9rem;line-height:1.5;overflow-x:auto">{html.escape(src)}</pre>'
+            content_html = f'<pre style="white-space:pre-wrap;word-wrap:break-word;padding:1rem;font-size:.9rem;line-height:1.5;overflow-x:auto">{html.escape(src)}</pre>'
             toc = ""
         else:
             toggle_link = f'<a href="/history/{name_esc}?snap={snap_esc}&amp;view=source">View Source</a>'
