@@ -38,6 +38,20 @@ LINEBREAK_ON_NEWLINE = True        # set True to render a single newline as <br>
 
 TODO_CYCLE_3STATE = False           # True = cycle [ ]→[x]→[~]→[ ]; False = toggle [ ]↔[x] only (no in-progress state)
 
+# Page-name template for the /today redirect.  Uses wiki link notation (colons for namespaces),
+# same as [[ns:PageName]] in markup.  Available tokens:
+#   {yyyy}=4-digit year  {yy}=2-digit year
+#   {mm}=zero-padded month (01-12)   {m}=month without padding (1-12)
+#   {dd}=zero-padded day (01-31)     {d}=day without padding (1-31)
+#   {www}=weekday name (Monday…)     {ww}=short weekday (Mon…)
+#   {wn}=ISO week number (01-53)     {q}=quarter (1-4)
+# Examples:
+#   "journal:{yyyy}-{mm}-{dd}"    → [[journal:2026-03-30]]  (default, daily pages)
+#   "journal:{yyyy}:W{wn}"        → [[journal:2026:W14]]    (weekly pages)
+#   "journal:{yyyy}:{mm}:{dd}"    → [[journal:2026:03:30]]  (daily, nested namespaces)
+#   "{yyyy}-{mm}"                 → [[2026-03]]              (monthly pages, root namespace)
+JOURNAL_PAGE_FORMAT = "journal:{yyyy}-{mm}-{dd}"
+
 app = FastAPI()
 
 # ── storage helpers ────────────────────────────────────────────────────────────
@@ -1934,8 +1948,23 @@ def today(_auth: None = Depends(require_auth)):
         tz = ZoneInfo(DISPLAY_TIMEZONE)
     except Exception:
         tz = timezone.utc
-    today_str = datetime.now(tz).strftime("%Y-%m-%d")
-    return RedirectResponse(f"/wiki/journal/{today_str}", status_code=303)
+    now = datetime.now(tz)
+    page_name = (
+        JOURNAL_PAGE_FORMAT
+        .replace("{yyyy}", now.strftime("%Y"))
+        .replace("{yy}",   now.strftime("%y"))
+        .replace("{mm}",   now.strftime("%m"))
+        .replace("{m}",    str(now.month))
+        .replace("{dd}",   now.strftime("%d"))
+        .replace("{d}",    str(now.day))
+        .replace("{www}",  now.strftime("%A"))
+        .replace("{ww}",   now.strftime("%a"))
+        .replace("{wn}",   now.strftime("%V"))
+        .replace("{q}",    str((now.month - 1) // 3 + 1))
+    )
+    # Convert colon namespace separators to slashes for the URL
+    page_name = page_name.replace(":", "/")
+    return RedirectResponse(f"/wiki/{page_name}", status_code=303)
 
 
 @app.post("/pin/{name:path}")
