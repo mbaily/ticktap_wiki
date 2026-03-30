@@ -1,4 +1,5 @@
 import os, re, html, time, secrets, json, math, shutil
+from urllib.parse import quote
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 from pathlib import Path
@@ -1070,9 +1071,11 @@ def view(request: Request, name: str, _auth: None = Depends(require_auth)):
         f'}});'
         f'var data=await resp.json();'
         f'if(!resp.ok||!data.ok){{alert(data.error||"Save failed");btn.disabled=false;return;}}'
+        f'document.querySelectorAll(".content [data-line]").forEach(function(se){{var dl=parseInt(se.dataset.line,10);if(dl>=data.line)se.dataset.line=dl+1;}});'
         f'if(_qtodoPrefix[0]==="["){{'
         f'var newEl=document.createElement("p");'
         f'newEl.className="todo";'
+        f'newEl.draggable=true;'
         f'newEl.dataset.line=data.line;'
         f'newEl.dataset.indent=_qtodoIndent;'
         f'newEl.dataset.prefix=_qtodoPrefix;'
@@ -1150,7 +1153,7 @@ def view(request: Request, name: str, _auth: None = Depends(require_auth)):
         f'if(last&&last!==_drag)last.insertAdjacentElement("afterend",_drag);'
         f'}}else{{return;}}'
         f'var order=Array.from(document.querySelectorAll(".content p.todo[data-line]")).map(function(el){{return parseInt(el.dataset.line,10);}});'
-        f'fetch("/reorder-todos/"+_wikiPage,{{method:"POST",headers:{{"Content-Type":"application/json"}},body:JSON.stringify({{order:order}})}});'
+        f'fetch("/reorder-todos/"+_wikiPage,{{method:"POST",headers:{{"Content-Type":"application/json"}},body:JSON.stringify({{order:order}})}}).then(function(){{var so=order.slice().sort(function(a,b){{return a-b;}});Array.from(document.querySelectorAll(".content p.todo[data-line]"),(function(el,i){{el.dataset.line=so[i];var cb=el.querySelector("input[data-line]");if(cb)cb.dataset.line=so[i];}}));}});'
         f'}});}})();'
         f'</script>'
     )
@@ -1968,7 +1971,7 @@ def tags_index(request: Request, _auth: None = Depends(require_auth)):
                 'to a page\'s <code>~~META:</code> block.</div></div></div>')
     else:
         items = "".join(
-            f'<li style="margin:.4rem 0"><a href="/tags/{html.escape(t)}" class="tag-pill">{html.escape(t)}</a>'
+            f'<li style="margin:.4rem 0"><a href="/tags/{quote(t, safe="")}" class="tag-pill">{html.escape(t)}</a>'
             f' <small style="color:#888">{len(pages)} page{"s" if len(pages) != 1 else ""}</small>'
             f' &mdash; ' + ", ".join(
                 f'<a href="/wiki/{html.escape(p)}">{html.escape(p.split("/")[-1])}</a>'
