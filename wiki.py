@@ -998,7 +998,7 @@ def view(request: Request, name: str, _auth: None = Depends(require_auth)):
     meta = parse_meta(src)
     tags = [t.strip() for t in meta.get("tags", "").split(",") if t.strip()]
     tags_html = "".join(
-        f'<a href="/tags/{html.escape(t)}" class="tag-pill">{html.escape(t)}</a>'
+        f'<a href="/tags/{quote(t, safe="")}" class="tag-pill">{html.escape(t)}</a>'
         for t in tags
     )
     pins = _get_pins(request)
@@ -1051,9 +1051,9 @@ def view(request: Request, name: str, _auth: None = Depends(require_auth)):
         f'_qtodoEl=null;_qtodoLine=-1;_qtodoIndent=0;_qtodoPrefix="[ ] ";'
         f'document.getElementById("qtodo-bar").style.display="none";'
         f'}}'
-        f'function qtodoOpenBottom(lastLine){{'
+        f'function qtodoOpenBottom(){{'
         f'if(_qtodoEl)_qtodoEl.classList.remove("qtodo-sel");'
-        f'_qtodoEl=null;_qtodoLine=lastLine;_qtodoIndent=0;_qtodoPrefix="[ ] ";'
+        f'_qtodoEl=null;_qtodoLine=999999;_qtodoIndent=0;_qtodoPrefix="[ ] ";'
         f'document.getElementById("qtodo-preview").textContent="end of page";'
         f'document.getElementById("qtodo-bar").style.display="flex";'
         f'var inp=document.getElementById("qtodo-text");inp.value="";inp.focus();'
@@ -1157,14 +1157,13 @@ def view(request: Request, name: str, _auth: None = Depends(require_auth)):
         f'}});}})();'
         f'</script>'
     )
-    last_line = len(src.splitlines())
     fab = (
-        f'<button onclick="qtodoOpenBottom({last_line})" title="Quick-add todo at end of page" '
+        f'<button onclick="qtodoOpenBottom()" title="Quick-add todo at end of page" '
         f'style="position:fixed;bottom:4.5rem;right:1rem;z-index:99;width:3rem;height:3rem;'
         f'border-radius:50%;background:#27ae60;color:#fff;border:none;font-size:1.5rem;'
         f'cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,.3);line-height:1">+</button>'
     )
-    body = f'{toolbar}{todo_bar}{fab}<div class="layout"><div class="content" data-lastline="{last_line}">{rendered}</div>{toc_html(headings)}</div>'
+    body = f'{toolbar}{todo_bar}{fab}<div class="layout"><div class="content">{rendered}</div>{toc_html(headings)}</div>'
     return HTMLResponse(shell(name.split("/")[-1], body, request=request))
 
 
