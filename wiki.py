@@ -544,6 +544,7 @@ textarea{width:100%;font-family:monospace;font-size:.95rem;padding:.5rem;border:
 .breadcrumb{font-size:.85rem;color:#666;margin-bottom:.5rem}.breadcrumb a{color:#2c3e50}
 input[type=checkbox]{cursor:pointer;width:1.1em;height:1.1em;vertical-align:middle}
 .todo-done{opacity:.6}
+.todo-inprogress{font-style:italic}.todo-inprogress>input[type=checkbox]{opacity:.7}
 .search-result{margin:.6rem 0;padding:.5rem;border:1px solid #ddd;border-radius:3px;background:#fff}
 .search-result a{font-weight:bold}
 .snippet{font-size:.85rem;color:#555;font-family:monospace}
@@ -1418,9 +1419,10 @@ def search(request: Request, q: str = "", _auth: None = Depends(require_auth)):
     results = []
     for f in sorted(PAGES_DIR.rglob("*.wiki")):
         try:
-            text = f.read_text(encoding="utf-8")
+            raw = f.read_text(encoding="utf-8")
         except Exception:
             continue
+        text, _ = strip_meta(raw)  # skip ~~META: block so it doesn't pollute results
         lines = text.splitlines()
         hit_indices = [i for i, ln in enumerate(lines) if ql in ln.lower()]
         if not hit_indices:
