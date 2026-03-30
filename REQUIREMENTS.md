@@ -292,7 +292,7 @@ A separate, dedicated editing mode — never mixed into the reader view.
   - Parameters: `VERSION_BASE_SECS = 30` (T) and `VERSION_SLOTS = 10` (K).
   - Maximum retained age: `e^K × T` seconds.
   - For snapshots older than T seconds, only the newest in each age band `[e^i×T, e^(i+1)×T)` is kept (band index `i = floor(log(age/T))`).
-  - Sub-T snapshots: only the newest is kept; it ages into a band on future saves.
+  - Sub-T snapshots: only the oldest is kept; it ages into band 0 on future saves. (Keeping the oldest preserves "what the page looked like ~T seconds ago" rather than just the last intermediate edit.)
 - **History list** (`GET /history/{name}`): table of retained snapshots with timestamp, view link, and restore button.
 - **Snapshot view** (`GET /history/{name}?snap={id}`): read-only rendered view of the snapshot with a "Restore this version" button.
 - **Restore** (`POST /restore/{name}`): writes the snapshot content back as the current page (which itself creates a new snapshot of the page being overwritten).

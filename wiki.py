@@ -150,7 +150,7 @@ def _prune_attic(name: str):
         if band not in band_newest or dt > band_newest[band][0]:
             band_newest[band] = (dt, age, f)
     sub_t = [(dt, age, f) for dt, age, f in entries if age < T]
-    sub_t_keep = {max(sub_t, key=lambda x: x[0])[2]} if sub_t else set()
+    sub_t_keep = {min(sub_t, key=lambda x: x[0])[2]} if sub_t else set()
     keep = {v[2] for v in band_newest.values()} | sub_t_keep
     for dt, age, f in entries:
         if f not in keep:
