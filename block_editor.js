@@ -310,19 +310,19 @@ function fillContent(block, content, api) {
       const ll = document.createElement('span'); ll.className = 'be-code-lang-label'; ll.textContent = 'Lang:';
       const li = document.createElement('input'); li.type = 'text'; li.className = 'be-code-lang'; li.value = block.lang; li.placeholder = '(none)';
       li.addEventListener('input', function () { block.lang = li.value; api.onChange(); });
-      li.addEventListener('blur', function () { api.pushUndo(); });
+      li.addEventListener('blur', function () { if (!_rendering) api.pushUndo(); });
       lr.appendChild(ll); lr.appendChild(li); content.appendChild(lr);
       const ta = document.createElement('textarea'); ta.className = 'be-code-area';
       ta.value = block.codeLines.join('\n'); ta.rows = Math.max(3, block.codeLines.length + 1); ta.spellcheck = false;
       ta.addEventListener('input', function () { block.codeLines = ta.value.split('\n'); autoGrow(ta); api.onChange(); });
-      ta.addEventListener('blur', function () { api.pushUndo(); });
+      ta.addEventListener('blur', function () { if (!_rendering) api.pushUndo(); });
       content.appendChild(ta); break;
     }
     case 'table': {
       const ta = document.createElement('textarea'); ta.className = 'be-table-area';
       ta.value = block.rows.join('\n'); ta.rows = Math.max(3, block.rows.length + 1); ta.spellcheck = false;
       ta.addEventListener('input', function () { block.rows = ta.value.split('\n'); autoGrow(ta); api.onChange(); });
-      ta.addEventListener('blur', function () { api.pushUndo(); });
+      ta.addEventListener('blur', function () { if (!_rendering) api.pushUndo(); });
       content.appendChild(ta); break;
     }
     case 'image': {
@@ -330,15 +330,15 @@ function fillContent(block, content, api) {
       const sl = document.createElement('span'); sl.className = 'be-img-label'; sl.textContent = '🖼';
       const si = document.createElement('input'); si.type = 'text'; si.className = 'be-img-src'; si.value = block.src; si.placeholder = 'image.png';
       const ai = document.createElement('input'); ai.type = 'text'; ai.className = 'be-img-alt'; ai.value = block.alt; ai.placeholder = 'Alt text';
-      si.addEventListener('input', function () { block.src = si.value; api.onChange(); }); si.addEventListener('blur', function () { api.pushUndo(); });
-      ai.addEventListener('input', function () { block.alt = ai.value; api.onChange(); }); ai.addEventListener('blur', function () { api.pushUndo(); });
+      si.addEventListener('input', function () { block.src = si.value; api.onChange(); }); si.addEventListener('blur', function () { if (!_rendering) api.pushUndo(); });
+      ai.addEventListener('input', function () { block.alt = ai.value; api.onChange(); }); ai.addEventListener('blur', function () { if (!_rendering) api.pushUndo(); });
       r.appendChild(sl); r.appendChild(si); r.appendChild(ai); content.appendChild(r); break;
     }
     case 'meta': {
       const ta = document.createElement('textarea'); ta.className = 'be-meta-area';
       ta.value = block.lines.join('\n'); ta.rows = Math.max(2, block.lines.length + 1); ta.spellcheck = false;
       ta.addEventListener('input', function () { block.lines = ta.value.split('\n'); autoGrow(ta); api.onChange(); });
-      ta.addEventListener('blur', function () { api.pushUndo(); });
+      ta.addEventListener('blur', function () { if (!_rendering) api.pushUndo(); });
       content.appendChild(ta); break;
     }
     case 'blank': {
@@ -350,7 +350,7 @@ function fillContent(block, content, api) {
       const ta = document.createElement('textarea'); ta.className = 'be-raw-area';
       ta.value = block.raw || ''; ta.rows = Math.max(2, (block.raw || '').split('\n').length + 1); ta.spellcheck = false;
       ta.addEventListener('input', function () { block.raw = ta.value; autoGrow(ta); api.onChange(); });
-      ta.addEventListener('blur', function () { api.pushUndo(); });
+      ta.addEventListener('blur', function () { if (!_rendering) api.pushUndo(); });
       content.appendChild(ta); break;
     }
   }
@@ -358,11 +358,12 @@ function fillContent(block, content, api) {
 
 // ── Paragraph per-line inputs ────────────────────────────────────────────────
 let _reindexing = false;
+let _rendering = false;
 function makeParaLine(block, idx, content, api) {
   const inp = document.createElement('textarea'); inp.className = 'be-para-line be-autogrow';
   inp.rows = 1; inp.value = block.lines[idx]; inp.placeholder = idx === 0 ? 'Paragraph text…' : '';
   inp.addEventListener('input', function () { block.lines[idx] = inp.value; autoGrow(inp); api.onChange(); });
-  inp.addEventListener('blur', function () { if (!_reindexing) api.pushUndo(); });
+  inp.addEventListener('blur', function () { if (!_reindexing && !_rendering) api.pushUndo(); });
   inp.addEventListener('keydown', function (e) {
     if (e.key === 'Enter') {
       e.preventDefault();
@@ -405,7 +406,7 @@ function mkInput(initialValue, onChange, api) {
   const inp = document.createElement('textarea'); inp.className = 'be-autogrow'; inp.rows = 1;
   inp.value = initialValue;
   inp.addEventListener('input', function () { onChange(inp.value); autoGrow(inp); });
-  inp.addEventListener('blur', function () { api.pushUndo(); });
+  inp.addEventListener('blur', function () { if (!_rendering) api.pushUndo(); });
   setTimeout(function () { autoGrow(inp); }, 0);
   return inp;
 }
@@ -809,7 +810,9 @@ function init() {
   });
 
   function render() {
+    _rendering = true;
     cardsEl.innerHTML = '';
+    _rendering = false;
     blocks.forEach(function (block) { cardsEl.appendChild(renderCard(block, api)); });
     cardsEl.querySelectorAll('textarea').forEach(autoGrow);
     syncSelection();
