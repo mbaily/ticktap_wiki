@@ -1350,7 +1350,7 @@ def view(request: Request, name: str, _auth: None = Depends(require_auth)):
     )
     pins = _get_pins(request)
     is_pinned = name in pins
-    pin_icon = "&#11088;" if is_pinned else "&#9734;"
+    pin_icon = "&#128204;" if is_pinned else "&#128205;"
     pin_title = "Unpin page" if is_pinned else "Pin page"
     toolbar = (f'<div class="toolbar">{breadcrumb(name)}'
                f'{tags_html}'
