@@ -50,7 +50,7 @@ MARKUP_BAR_DESKTOP = False          # show the editor markup toolbar on desktop
 MARKUP_BAR_MOBILE  = True          # show the editor markup toolbar on mobile (≤700 px)
 
 EDIT_PAGE_PADDING  = "2px"        # left/right padding of the edit page layout (CSS length, e.g. "0rem", "1rem", "16px")
-READ_PAGE_PADDING  = "0px"       # left/right padding of the read page layout (CSS length, e.g. "0rem", "1rem", "16px")
+READ_PAGE_PADDING  = "2px"       # left/right padding of the read page layout (CSS length, e.g. "0rem", "1rem", "16px")
 
 # ── colours ──────────────────────────────────────────────────────────────────
 # Light-mode palette
@@ -674,7 +674,8 @@ input[type=checkbox]:checked::after{content:'';position:absolute;left:25%;top:5%
   nav form{width:100%;margin-left:0!important}
   nav input[type=search]{width:100%}
   .layout{flex-direction:column;padding:0 .5rem}
-  .layout.edit-layout,.layout.read-layout{padding:0 .5rem}
+  .layout.edit-layout{padding:0 __EDIT_PAD__}
+  .layout.read-layout{padding:0 __READ_PAD__}
   .toc{width:100%;position:static;order:-1}
   .toc ul{display:none}
   .toc h3 button{transform:scale(2,1.5);transform-origin:center;margin-right:.5rem}
