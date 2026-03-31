@@ -783,6 +783,8 @@ function init() {
   btnDel.addEventListener('click', function () {
     const sel = api.getSelection();
     if (sel.length === 0) return;
+    const msg = sel.length === 1 ? 'Delete this block?' : 'Delete ' + sel.length + ' blocks?';
+    if (!confirm(msg)) return;
     undo.push(blocksToMarkup(blocks));
     const ids = new Set(sel.map(function (b) { return b._id; }));
     blocks = blocks.filter(function (b) { return !ids.has(b._id); });
