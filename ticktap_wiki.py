@@ -674,6 +674,7 @@ input[type=checkbox]:checked::after{content:'';position:absolute;left:25%;top:5%
   nav form{width:100%;margin-left:0!important}
   nav input[type=search]{width:100%}
   .layout{flex-direction:column;padding:0 .5rem}
+  .layout.edit-layout,.layout.read-layout{padding:0 .5rem}
   .toc{width:100%;position:static;order:-1}
   .toc ul{display:none}
   .toc h3 button{transform:scale(2,1.5);transform-origin:center;margin-right:.5rem}
