@@ -1554,7 +1554,7 @@ def edit_get(request: Request, name: str, _auth: None = Depends(require_auth)):
     except ValueError:
         return HTMLResponse("Invalid page name", 400)
     if src is None:
-        src = f"====== {name.split('/')[-1]} ======\n\n===== Introduction =====\n\nNew page.\n"
+        src = f"====== {name.split('/')[-1].replace('_', ' ')} ======\n\n===== Introduction =====\n\nNew page.\n"
     content = html.escape(src)
     ns_for_upload = "/".join(name.split("/")[:-1])
     upload_href = f"/upload/{ns_for_upload}" if ns_for_upload else "/upload"

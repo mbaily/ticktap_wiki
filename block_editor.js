@@ -361,13 +361,24 @@ function makeParaLine(block, idx, content, api) {
   inp.addEventListener('blur', function () { api.pushUndo(); });
   inp.addEventListener('keydown', function (e) {
     if (e.key === 'Enter') {
-      e.preventDefault(); block.lines.splice(idx + 1, 0, '');
-      const nl = makeParaLine(block, idx + 1, content, api); inp.after(nl);
-      _reindexPara(block, content, api); nl.focus(); api.onChange(); api.pushUndoImmediate();
-    } else if (e.key === 'Backspace' && inp.selectionStart === 0 && inp.selectionEnd === 0 && block.lines.length > 1) {
-      const prev = inp.previousElementSibling; block.lines.splice(idx, 1);
+      e.preventDefault();
+      const caret = inp.selectionStart;
+      const before = inp.value.slice(0, caret);
+      const after = inp.value.slice(caret);
+      block.lines[idx] = before;
+      block.lines.splice(idx + 1, 0, after);
       _reindexPara(block, content, api);
-      if (prev && prev.tagName === 'TEXTAREA') { prev.focus(); prev.setSelectionRange(prev.value.length, prev.value.length); }
+      const nextInp = content.querySelectorAll('.be-para-line')[idx + 1];
+      if (nextInp) { nextInp.focus(); nextInp.setSelectionRange(0, 0); }
+      api.onChange(); api.pushUndoImmediate();
+    } else if (e.key === 'Backspace' && inp.selectionStart === 0 && inp.selectionEnd === 0 && block.lines.length > 1) {
+      e.preventDefault();
+      const mergePos = block.lines[idx - 1].length;
+      block.lines[idx - 1] += block.lines[idx];
+      block.lines.splice(idx, 1);
+      _reindexPara(block, content, api);
+      const prevInp = content.querySelectorAll('.be-para-line')[idx - 1];
+      if (prevInp) { prevInp.focus(); prevInp.setSelectionRange(mergePos, mergePos); }
       api.onChange(); api.pushUndoImmediate();
     }
   });
@@ -375,8 +386,14 @@ function makeParaLine(block, idx, content, api) {
   return inp;
 }
 function _reindexPara(block, content, api) {
-  Array.from(content.querySelectorAll('.be-para-line')).forEach(function (inp, i) {
-    const n = makeParaLine(block, i, content, api); n.value = block.lines[i]; inp.replaceWith(n);
+  // Remove all existing line inputs
+  Array.from(content.querySelectorAll('.be-para-line')).forEach(function (el) { el.remove(); });
+  // Rebuild entirely from block.lines so count always matches data
+  block.lines.forEach(function (line, i) {
+    const n = makeParaLine(block, i, content, api);
+    n.value = line;
+    content.appendChild(n);
+    setTimeout(function () { autoGrow(n); }, 0);
   });
 }
 function mkInput(initialValue, onChange, api) {
