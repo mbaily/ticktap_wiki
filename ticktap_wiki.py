@@ -767,10 +767,10 @@ document.querySelectorAll('textarea').forEach(ta=>{
     const v=ta.value,pos=ta.selectionStart;
     if(ta.selectionStart!==ta.selectionEnd)return;
     // Find the start of the current line
-    const lineStart=v.lastIndexOf('\n',pos-1)+1;
+    const lineStart=v.lastIndexOf('\\n',pos-1)+1;
     const lineText=v.slice(lineStart,pos);
     // Detect list prefix: optional indent spaces + (bullet/ordered/todo marker)
-    const m=lineText.match(/^( *)(\* |- |\[ \] |\[x\] |\[~\] )/);
+    const m=lineText.match(/^( *)(\\* |- |\\[ \\] |\\[x\\] |\\[~\\] )/);
     if(!m)return;
     const indent=m[1],prefix=m[2];
     const afterPrefix=lineStart+indent.length+prefix.length;
@@ -783,7 +783,7 @@ document.querySelectorAll('textarea').forEach(ta=>{
       }else{
         // Normalise todo prefix to empty state
         const newPrefix=prefix==='[x] '||prefix==='[~] '?'[ ] ':prefix;
-        const ins='\n'+indent+newPrefix;
+        const ins='\\n'+indent+newPrefix;
         ta.value=v.slice(0,pos)+ins+v.slice(pos);
         ta.selectionStart=ta.selectionEnd=pos+ins.length;
       }
