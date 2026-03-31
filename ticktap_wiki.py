@@ -46,7 +46,7 @@ INLINE_DELETE     = False             # show ❌ delete buttons on todo and list
 SECTION_EDIT_MIN  = 1              # minimum heading level to show [edit] section buttons (1 is h1 is ======)
 SECTION_EDIT_MAX  = 4              # maximum heading level to show [edit] section buttons (5 is h5 is ==)
 
-MARKUP_BAR_DESKTOP = False          # show the editor markup toolbar on desktop
+MARKUP_BAR_DESKTOP = True          # show the editor markup toolbar on desktop
 MARKUP_BAR_MOBILE  = True          # show the editor markup toolbar on mobile (≤700 px)
 
 EDIT_PAGE_PADDING  = "2px"        # left/right padding of the edit page layout (CSS length, e.g. "0rem", "1rem", "16px")
