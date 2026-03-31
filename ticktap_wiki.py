@@ -647,7 +647,6 @@ textarea{width:100%;font-family:monospace;font-size:.95rem;padding:.5rem;border:
 .edit-toolbar button,.edit-toolbar a{padding:.3rem .7rem;border-radius:3px;border:1px solid #aaa;cursor:pointer;text-decoration:none;font-size:.9rem}
 .markup-bar{display:__MB_DESKTOP__;gap:.2rem;margin-bottom:.4rem;flex-wrap:wrap;align-items:center}
 .markup-bar button{padding:.15rem .4rem;border-radius:3px;border:1px solid #bbb;cursor:pointer;font-size:.82rem;background:none;line-height:1.5;font-family:inherit}
-.markup-bar .mb-sep{width:1px;background:#ddd;align-self:stretch;margin:0 .2rem}
 .preview-box{margin-top:1rem;padding:1rem;border:1px dashed #aaa;border-radius:4px;background:#fff}
 .notice{background:#ffeeba;border:1px solid #ffc107;padding:.8rem 1rem;border-radius:4px;margin:1rem 0}
 .breadcrumb{font-size:.85rem;color:#666;margin-bottom:.5rem}.breadcrumb a{color:#2c3e50}
@@ -712,7 +711,7 @@ nav{background:#0f3460}
 .toolbar{background:#1e2a45}
 .toolbar a,.toolbar button{color:#8ab4f8;border-color:#2a3f6f}
 .edit-toolbar button,.edit-toolbar a{color:#cdd;border-color:#2a3f6f}
-.markup-bar button{color:#cdd;border-color:#2a3f6f}.markup-bar .mb-sep{background:#2a3f6f}
+.markup-bar button{color:#cdd;border-color:#2a3f6f}
 textarea{-webkit-appearance:none;background:#000000;color:#cdd;border-color:#2a3f6f}
 input[type=text],input[type=password],input[type=search]{-webkit-appearance:none;background:#1a1a2e;color:#cdd;border-color:#2a3f6f}
 .preview-box{background:#16213e;border-color:#2a3f6f}
@@ -869,20 +868,16 @@ MARKUP_BAR_HTML = (
     '<button type="button" title="Heading 3 (==== Text ====)" onclick="wrapHeading(&apos;====&apos;)">H3</button>'
     '<button type="button" title="Heading 4 (=== Text ===)" onclick="wrapHeading(&apos;===&apos;)">H4</button>'
     '<button type="button" title="Heading 5 (== Text ==)" onclick="wrapHeading(&apos;==&apos;)">H5</button>'
-    '<span class="mb-sep"></span>'
     '<button type="button" title="Bold (**text**)" onclick="wrapSel(&apos;**&apos;,&apos;**&apos;,&apos;bold text&apos;)"><b>B</b></button>'
     '<button type="button" title="Italic (//text//)" onclick="wrapSel(&apos;//&apos;,&apos;//&apos;,&apos;italic text&apos;)"><i>I</i></button>'
     '<button type="button" title="Underline (__text__)" onclick="wrapSel(&apos;__&apos;,&apos;__&apos;,&apos;underlined text&apos;)"><u>U</u></button>'
     '<button type="button" title="Strikethrough (~~text~~)" onclick="wrapSel(&apos;~~&apos;,&apos;~~&apos;,&apos;strikethrough&apos;)"><s>S</s></button>'
     '<button type="button" title="Inline code" onclick="wrapSel(&apos;`&apos;,&apos;`&apos;,&apos;code&apos;)">&#96;&hellip;&#96;</button>'
-    '<span class="mb-sep"></span>'
     '<button type="button" title="Outdent (remove 2 spaces)" onclick="outdentLine()">&#8676;</button>'
     '<button type="button" title="Indent (add 2 spaces)" onclick="indentLine()">&#8677;</button>'
-    '<span class="mb-sep"></span>'
     '<button type="button" title="Bullet list item (  * item)" onclick="prefixLine(&apos;  * &apos;)">&#8226;</button>'
     '<button type="button" title="Numbered list item (  - item)" onclick="prefixLine(&apos;  - &apos;)">1.</button>'
     '<button type="button" title="Todo checkbox item ([ ] item)" onclick="prefixLine(&apos;[ ] &apos;)">&#9744;</button>'
-    '<span class="mb-sep"></span>'
     '<button type="button" title="Horizontal rule (----)" onclick="insertText(&apos;\\n----\\n&apos;)">&#8212;</button>'
     '<button type="button" title="Internal link ([[PageName]])" onclick="wrapSel(&apos;[[&apos;,&apos;]]&apos;,&apos;PageName&apos;)">[[&hellip;]]</button>'
     '<button type="button" title="Code block (``` fences)" onclick="wrapSel(&apos;```\\n&apos;,&apos;\\n```&apos;,&apos;code here&apos;)">&lt;/&gt;</button>'
