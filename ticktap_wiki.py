@@ -456,7 +456,10 @@ def parse(src: str, name: str = "", section_edit: bool = True) -> tuple[str, lis
             headings.append((level, text, anchor))
             edit_btn = ""
             if SECTION_EDIT_MIN <= level <= SECTION_EDIT_MAX and section_edit and name:
-                edit_btn = f' <a class="sect-edit" href="/sect/{name}/{sect_count}">[edit]</a>'
+                edit_btn = (f' <span class="sect-edit-btns">'
+                            f'<a class="sect-edit" title="Block editor" href="/block-sect/{name}/{sect_count}">&#9783;</a>'
+                            f' <a class="sect-edit" href="/sect/{name}/{sect_count}">[edit]</a>'
+                            f'</span>')
                 sect_count += 1
             out.append(f'<h{level} id="{anchor}" data-line="{i + meta_offset}">{html.escape(text)}{edit_btn}</h{level}>')
             continue
@@ -642,6 +645,7 @@ p.todo{margin:__ITEM_SP__ 0}
 .wiki-table tr:nth-child(even) td{background:#f9f9f9}
 a.new-page{color:#c0392b;text-decoration:underline dashed}
 .sect-edit{font-size:.75rem;color:#888;border:1px solid #ccc;padding:.1rem .3rem;border-radius:3px;text-decoration:none;margin-left:.5rem}
+.sect-edit-btns{display:inline-flex;align-items:center;gap:.25rem;white-space:nowrap;flex-shrink:0}
 textarea{width:100%;font-family:monospace;font-size:.95rem;padding:.5rem;border:1px solid #ccc;border-radius:4px}
 .edit-toolbar{display:flex;gap:.5rem;margin-bottom:.5rem;flex-wrap:wrap;align-items:center}
 .edit-toolbar button,.edit-toolbar a{padding:.3rem .7rem;border-radius:3px;border:1px solid #aaa;cursor:pointer;text-decoration:none;font-size:.9rem}
@@ -884,6 +888,12 @@ MARKUP_BAR_HTML = (
     '</div>'
 )
 
+# ── block editor static asset ────────────────────────────────────────────────
+_BE_JS_PATH = Path(__file__).parent / "block_editor.js"
+BLOCK_EDITOR_JS = _BE_JS_PATH.read_text(encoding="utf-8") if _BE_JS_PATH.exists() else "/* block_editor.js not found */"
+BLOCK_EDITOR_JS_HASH = hashlib.sha256(BLOCK_EDITOR_JS.encode()).hexdigest()[:12]
+BLOCK_EDITOR_JS_URL  = f"/static/block-editor-{BLOCK_EDITOR_JS_HASH}.js"
+
 _CSS_FINAL  = (CSS
     .replace('__ITEM_SP__', ITEM_SPACING)
     .replace('__MB_DESKTOP__', 'flex' if MARKUP_BAR_DESKTOP else 'none')
@@ -931,6 +941,14 @@ def serve_js(h: str):
     if h != _JS_HASH:
         return Response(status_code=404)
     return Response(content=JS, media_type="application/javascript",
+                    headers={"Cache-Control": "public, max-age=31536000, immutable"})
+
+@app.get("/static/block-editor-{h}.js")
+def serve_block_editor_js(h: str):
+    from fastapi.responses import Response
+    if h != BLOCK_EDITOR_JS_HASH:
+        return Response(status_code=404)
+    return Response(content=BLOCK_EDITOR_JS, media_type="application/javascript",
                     headers={"Cache-Control": "public, max-age=31536000, immutable"})
 
 # ── HTML helpers ───────────────────────────────────────────────────────────────
@@ -1297,6 +1315,7 @@ def view(request: Request, name: str, _auth: None = Depends(require_auth)):
     toolbar = (f'<div class="toolbar">{breadcrumb(name)}'
                f'{tags_html}'
                f'<span style="margin-left:auto;font-size:.8rem;color:#666">Modified: {mtime}</span>'
+               f'<a href="/block-edit/{name}" class="sect-edit" title="Block editor">&#9783;</a>'
                f'<a href="/edit/{name}">[edit page]</a>'
                + (f'<a href="/history/{name}">[history]</a>' if VERSIONING_ENABLED else '') +
                f'<form method="post" action="/pin/{html.escape(name)}" style="display:inline">'
@@ -1680,6 +1699,65 @@ async def delete_line(name: str, line: int, _auth: None = Depends(require_auth))
     except OSError:
         return JSONResponse({"ok": False, "error": "Save failed"}, status_code=500)
     return JSONResponse({"ok": True, "deleted_line": line})
+
+
+# ── block editor routes ────────────────────────────────────────────────────────
+
+@app.get("/raw/{name:path}")
+def raw_page(name: str, _auth: None = Depends(require_auth)):
+    name = normalize_name(name)
+    try:
+        src = read_page(name)
+    except ValueError:
+        return JSONResponse({"error": "Invalid page name"}, status_code=400)
+    return JSONResponse({"content": src or ""})
+
+
+@app.get("/raw-sect/{name:path}/{idx}")
+def raw_section(name: str, idx: int, _auth: None = Depends(require_auth)):
+    name = normalize_name(name)
+    if idx < 0:
+        return JSONResponse({"error": "Section not found"}, status_code=404)
+    try:
+        src = read_page(name) or ""
+    except ValueError:
+        return JSONResponse({"error": "Invalid page name"}, status_code=400)
+    sections = find_editable_sections(src, SECTION_EDIT_MIN, SECTION_EDIT_MAX)
+    if idx >= len(sections):
+        return JSONResponse({"error": "Section not found"}, status_code=404)
+    _level, start_line, end_line = sections[idx]
+    anchor = _compute_anchor_for_line(src, start_line)
+    content = "\n".join(src.split("\n")[start_line:end_line])
+    return JSONResponse({"content": content, "anchor": anchor})
+
+
+@app.get("/block-edit/{name:path}", response_class=HTMLResponse)
+def block_edit(request: Request, name: str, _auth: None = Depends(require_auth)):
+    name = normalize_name(name)
+    try:
+        page_path(name)  # validate
+    except ValueError:
+        return HTMLResponse("Invalid page name", 400)
+    body = (f'<div id="block-editor-root" data-page="{html.escape(name)}"></div>'
+            f'<script src="{BLOCK_EDITOR_JS_URL}" defer></script>')
+    return HTMLResponse(shell(f"Block Edit \u2014 {name}", body, request=request))
+
+
+@app.get("/block-sect/{name:path}/{idx}", response_class=HTMLResponse)
+def block_sect(request: Request, name: str, idx: int, _auth: None = Depends(require_auth)):
+    name = normalize_name(name)
+    if idx < 0:
+        return HTMLResponse("Section not found", 400)
+    try:
+        src = read_page(name) or ""
+    except ValueError:
+        return HTMLResponse("Invalid page name", 400)
+    sections = find_editable_sections(src, SECTION_EDIT_MIN, SECTION_EDIT_MAX)
+    if idx >= len(sections):
+        return HTMLResponse("Section not found", 400)
+    body = (f'<div id="block-editor-root" data-page="{html.escape(name)}" data-sect="{idx}"></div>'
+            f'<script src="{BLOCK_EDITOR_JS_URL}" defer></script>')
+    return HTMLResponse(shell(f"Block Edit section \u2014 {name}", body, request=request))
 
 
 @app.get("/new", response_class=HTMLResponse)
