@@ -1,4 +1,4 @@
-import os, re, html, time, secrets, json, math, shutil, hashlib, base64
+import os, re, html, time, secrets, json, math, shutil, hashlib, base64, logging
 from urllib.parse import quote
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
@@ -45,6 +45,9 @@ INLINE_DELETE     = False             # show ❌ delete buttons on todo and list
 
 SECTION_EDIT_MIN  = 1              # minimum heading level to show [edit] section buttons (1 is h1 is ======)
 SECTION_EDIT_MAX  = 4              # maximum heading level to show [edit] section buttons (5 is h5 is ==)
+
+MARKUP_BAR_DESKTOP = False          # show the editor markup toolbar on desktop
+MARKUP_BAR_MOBILE  = True          # show the editor markup toolbar on mobile (≤700 px)
 
 # Page-name template for the /today redirect.  Uses wiki link notation (colons for namespaces),
 # same as [[ns:PageName]] in markup.  Available tokens:
@@ -615,6 +618,9 @@ a.new-page{color:#c0392b;text-decoration:underline dashed}
 textarea{width:100%;font-family:monospace;font-size:.95rem;padding:.5rem;border:1px solid #ccc;border-radius:4px}
 .edit-toolbar{display:flex;gap:.5rem;margin-bottom:.5rem;flex-wrap:wrap;align-items:center}
 .edit-toolbar button,.edit-toolbar a{padding:.3rem .7rem;border-radius:3px;border:1px solid #aaa;cursor:pointer;text-decoration:none;font-size:.9rem}
+.markup-bar{display:__MB_DESKTOP__;gap:.2rem;margin-bottom:.4rem;flex-wrap:wrap;align-items:center}
+.markup-bar button{padding:.15rem .4rem;border-radius:3px;border:1px solid #bbb;cursor:pointer;font-size:.82rem;background:none;line-height:1.5;font-family:inherit}
+.markup-bar .mb-sep{width:1px;background:#ddd;align-self:stretch;margin:0 .2rem}
 .preview-box{margin-top:1rem;padding:1rem;border:1px dashed #aaa;border-radius:4px;background:#fff}
 .notice{background:#ffeeba;border:1px solid #ffc107;padding:.8rem 1rem;border-radius:4px;margin:1rem 0}
 .breadcrumb{font-size:.85rem;color:#666;margin-bottom:.5rem}.breadcrumb a{color:#2c3e50}
@@ -651,6 +657,8 @@ input[type=checkbox]:checked::after{content:'';position:absolute;left:25%;top:5%
   p.todo[draggable]{cursor:default;-webkit-user-drag:none}
   p.todo.drag-over-before{border-top:none!important}
   p.todo.drag-over-after{border-bottom:none!important}
+  .markup-bar{display:__MB_MOBILE__;gap:.35rem}
+  .markup-bar button{font-size:1.1rem;padding:.4rem .65rem;min-width:2.4rem}
 }
 .tag-pill{display:inline-block;background:#e8f4f8;color:#2c3e50;border-radius:10px;padding:.1rem .5rem;font-size:.8rem;text-decoration:none;margin:.1rem .1rem;vertical-align:middle}
 .tag-pill:hover{background:#d0e8f0}
@@ -675,6 +683,7 @@ nav{background:#0f3460}
 .toolbar{background:#1e2a45}
 .toolbar a,.toolbar button{color:#8ab4f8;border-color:#2a3f6f}
 .edit-toolbar button,.edit-toolbar a{color:#cdd;border-color:#2a3f6f}
+.markup-bar button{color:#cdd;border-color:#2a3f6f}.markup-bar .mb-sep{background:#2a3f6f}
 textarea{-webkit-appearance:none;background:#1a1a2e;color:#cdd;border-color:#2a3f6f}
 input[type=text],input[type=password],input[type=search]{-webkit-appearance:none;background:#1a1a2e;color:#cdd;border-color:#2a3f6f}
 .preview-box{background:#16213e;border-color:#2a3f6f}
@@ -765,7 +774,97 @@ _FAVICON = bytes([
     80,62,44,255,                   # pixel BGRA: #2c3e50 fully opaque
     0,0,0,0,                        # AND mask row (1px, DWORD-aligned)
 ])
-_CSS_FINAL  = CSS.replace('__ITEM_SP__', ITEM_SPACING) + (CSS_DARK if DARK_MODE else "")
+MARKUP_BAR_JS = """
+function wrapSel(b,a,ph){
+  var ta=document.getElementById('ed');
+  var s=ta.selectionStart,e=ta.selectionEnd;
+  var sel=ta.value.slice(s,e)||(ph||'text');
+  ta.value=ta.value.slice(0,s)+b+sel+a+ta.value.slice(e);
+  ta.selectionStart=s+b.length;ta.selectionEnd=s+b.length+sel.length;
+  ta.focus();
+}
+function wrapHeading(m){
+  var ta=document.getElementById('ed');
+  var s=ta.selectionStart;
+  var ls=ta.value.lastIndexOf('\\n',s-1)+1;
+  var le=ta.value.indexOf('\\n',s);
+  var end=le===-1?ta.value.length:le;
+  var cur=ta.value.slice(ls,end).replace(/^[=\\s]+|[=\\s]+$/g,'').trim()||'Heading';
+  var nl=m+' '+cur+' '+m;
+  ta.value=ta.value.slice(0,ls)+nl+ta.value.slice(end);
+  ta.selectionStart=ls+m.length+1;ta.selectionEnd=ls+m.length+1+cur.length;
+  ta.focus();
+}
+function prefixLine(p){
+  var ta=document.getElementById('ed');
+  var s=ta.selectionStart;
+  var ls=ta.value.lastIndexOf('\\n',s-1)+1;
+  ta.value=ta.value.slice(0,ls)+p+ta.value.slice(ls);
+  ta.selectionStart=ta.selectionEnd=s+p.length;
+  ta.focus();
+}
+function insertText(t){
+  var ta=document.getElementById('ed');
+  var s=ta.selectionStart;
+  ta.value=ta.value.slice(0,s)+t+ta.value.slice(s);
+  ta.selectionStart=ta.selectionEnd=s+t.length;
+  ta.focus();
+}
+function indentLine(){
+  var ta=document.getElementById('ed');
+  var s=ta.selectionStart;
+  var ls=ta.value.lastIndexOf('\\n',s-1)+1;
+  ta.value=ta.value.slice(0,ls)+'  '+ta.value.slice(ls);
+  ta.selectionStart=ta.selectionEnd=s+2;
+  ta.focus();
+}
+function outdentLine(){
+  var ta=document.getElementById('ed');
+  var s=ta.selectionStart;
+  var ls=ta.value.lastIndexOf('\\n',s-1)+1;
+  var lead=ta.value.slice(ls,ls+2);
+  if(lead==='  '){
+    ta.value=ta.value.slice(0,ls)+ta.value.slice(ls+2);
+    ta.selectionStart=ta.selectionEnd=Math.max(ls,s-2);
+  }else{
+    ta.selectionStart=ta.selectionEnd=s;
+  }
+  ta.focus();
+}
+"""
+
+MARKUP_BAR_HTML = (
+    '<div class="markup-bar">'
+    '<button type="button" title="Heading 1 (====== Text ======)" onclick="wrapHeading(&apos;======&apos;)">H1</button>'
+    '<button type="button" title="Heading 2 (===== Text =====)" onclick="wrapHeading(&apos;=====&apos;)">H2</button>'
+    '<button type="button" title="Heading 3 (==== Text ====)" onclick="wrapHeading(&apos;====&apos;)">H3</button>'
+    '<button type="button" title="Heading 4 (=== Text ===)" onclick="wrapHeading(&apos;===&apos;)">H4</button>'
+    '<button type="button" title="Heading 5 (== Text ==)" onclick="wrapHeading(&apos;==&apos;)">H5</button>'
+    '<span class="mb-sep"></span>'
+    '<button type="button" title="Bold (**text**)" onclick="wrapSel(&apos;**&apos;,&apos;**&apos;,&apos;bold text&apos;)"><b>B</b></button>'
+    '<button type="button" title="Italic (//text//)" onclick="wrapSel(&apos;//&apos;,&apos;//&apos;,&apos;italic text&apos;)"><i>I</i></button>'
+    '<button type="button" title="Underline (__text__)" onclick="wrapSel(&apos;__&apos;,&apos;__&apos;,&apos;underlined text&apos;)"><u>U</u></button>'
+    '<button type="button" title="Strikethrough (~~text~~)" onclick="wrapSel(&apos;~~&apos;,&apos;~~&apos;,&apos;strikethrough&apos;)"><s>S</s></button>'
+    '<button type="button" title="Inline code" onclick="wrapSel(&apos;`&apos;,&apos;`&apos;,&apos;code&apos;)">&#96;&hellip;&#96;</button>'
+    '<span class="mb-sep"></span>'
+    '<button type="button" title="Outdent (remove 2 spaces)" onclick="outdentLine()">&#8676;</button>'
+    '<button type="button" title="Indent (add 2 spaces)" onclick="indentLine()">&#8677;</button>'
+    '<span class="mb-sep"></span>'
+    '<button type="button" title="Bullet list item (  * item)" onclick="prefixLine(&apos;  * &apos;)">&#8226;</button>'
+    '<button type="button" title="Numbered list item (  - item)" onclick="prefixLine(&apos;  - &apos;)">1.</button>'
+    '<button type="button" title="Todo checkbox item ([ ] item)" onclick="prefixLine(&apos;[ ] &apos;)">&#9744;</button>'
+    '<span class="mb-sep"></span>'
+    '<button type="button" title="Horizontal rule (----)" onclick="insertText(&apos;\\n----\\n&apos;)">&#8212;</button>'
+    '<button type="button" title="Internal link ([[PageName]])" onclick="wrapSel(&apos;[[&apos;,&apos;]]&apos;,&apos;PageName&apos;)">[[&hellip;]]</button>'
+    '<button type="button" title="Code block (``` fences)" onclick="wrapSel(&apos;```\\n&apos;,&apos;\\n```&apos;,&apos;code here&apos;)">&lt;/&gt;</button>'
+    '</div>'
+)
+
+_CSS_FINAL  = (CSS
+    .replace('__ITEM_SP__', ITEM_SPACING)
+    .replace('__MB_DESKTOP__', 'flex' if MARKUP_BAR_DESKTOP else 'none')
+    .replace('__MB_MOBILE__',  'flex' if MARKUP_BAR_MOBILE  else 'none')
+) + (CSS_DARK if DARK_MODE else "")
 _CSS_HASH   = hashlib.sha256(_CSS_FINAL.encode()).hexdigest()[:12]
 _JS_HASH    = hashlib.sha256(JS.encode()).hexdigest()[:12]
 _ICON_ETAG  = '"' + hashlib.sha256(_FAVICON).hexdigest()[:12] + '"'
@@ -1078,12 +1177,16 @@ def _htpasswd_set(username: str, password: str, htfile: Path):
 
 # ---- FastAPI dependency ----
 
+_auth_log = logging.getLogger("ticktap_wiki.auth")
+
 def require_auth(request: Request):
     if not AUTH_ENABLED:
         request.state.username = ""
         return
     token = _get_token(request)
     username = _validate_token(token)
+    _auth_log.info("require_auth %s token=%s valid=%s",
+                   request.url.path, bool(token), bool(username))
     if username:
         request.state.username = username
         return
@@ -1338,9 +1441,11 @@ def edit_section_get(request: Request, name: str, idx: int, _auth: None = Depend
             f'<form method="post"><div class="edit-toolbar">'
             f'<button type="submit">Save section</button>'
             f'<a href="/wiki/{name}{frag}">Cancel</a></div>'
-            f'<textarea name="content" rows="20">{content}</textarea>'
+            f'{MARKUP_BAR_HTML}'
+            f'<textarea name="content" rows="20" id="ed">{content}</textarea>'
             f'<input type="hidden" name="anchor" value="{html.escape(anchor)}">'
-            f'</form></div></div>')
+            f'</form></div></div>'
+            f'<script>{MARKUP_BAR_JS}</script>')
     return HTMLResponse(shell(f"Edit section \u2014 {name}", body, request=request))
 
 
@@ -1391,12 +1496,14 @@ def edit_get(request: Request, name: str, _auth: None = Depends(require_auth)):
             f'<button type="button" onclick="showPreview()">Preview</button>'
             f'<button type="button" onclick="openAttach()">&#128206; Attach</button>'
             f'</div>'
+            f'{MARKUP_BAR_HTML}'
             f'<form id="ef" method="post">'
             f'<textarea name="content" rows="30" id="ed">{content}</textarea>'
             f'</form>'
             f'<div id="pv" class="preview-box" style="display:none"></div>'
             f'</div></div>'
             f'<script>'
+            f'{MARKUP_BAR_JS}'
             f'async function showPreview(){{'
             f'  const r=await fetch("/preview",{{method:"POST",'
             f'    body:new URLSearchParams({{name:"{name}",content:document.getElementById("ed").value}})}});'
@@ -1712,8 +1819,11 @@ async def login_post(request: Request, username: str = Form(""), password: str =
     token = _issue_token(username)
     safe_next = next if next.startswith("/") and not next.startswith("//") else "/wiki/Home"
     resp = RedirectResponse(safe_next, status_code=303)
+    secure_cookie = request.url.scheme == "https"
+    _auth_log.info("login_post: user=%s scheme=%s secure=%s next=%s",
+                   username, request.url.scheme, secure_cookie, safe_next)
     resp.set_cookie("wiki_token", token, max_age=TOKEN_EXPIRY_DAYS * 86400,
-                    httponly=True, samesite="strict", secure=HTTPS_ENABLED, path="/")
+                    httponly=True, samesite="lax", secure=secure_cookie, path="/")
     return resp
 
 @app.get("/logout")
