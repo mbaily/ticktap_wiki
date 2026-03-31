@@ -357,11 +357,12 @@ function fillContent(block, content, api) {
 }
 
 // ── Paragraph per-line inputs ────────────────────────────────────────────────
+let _reindexing = false;
 function makeParaLine(block, idx, content, api) {
   const inp = document.createElement('textarea'); inp.className = 'be-para-line be-autogrow';
   inp.rows = 1; inp.value = block.lines[idx]; inp.placeholder = idx === 0 ? 'Paragraph text…' : '';
   inp.addEventListener('input', function () { block.lines[idx] = inp.value; autoGrow(inp); api.onChange(); });
-  inp.addEventListener('blur', function () { api.pushUndo(); });
+  inp.addEventListener('blur', function () { if (!_reindexing) api.pushUndo(); });
   inp.addEventListener('keydown', function (e) {
     if (e.key === 'Enter') {
       e.preventDefault();
@@ -389,6 +390,7 @@ function makeParaLine(block, idx, content, api) {
   return inp;
 }
 function _reindexPara(block, content, api) {
+  _reindexing = true;
   // Remove all existing line inputs
   Array.from(content.querySelectorAll('.be-para-line')).forEach(function (el) { el.remove(); });
   // Rebuild entirely from block.lines so count always matches data
@@ -397,6 +399,7 @@ function _reindexPara(block, content, api) {
     content.appendChild(n);
     setTimeout(function () { autoGrow(n); }, 0);
   });
+  _reindexing = false;
 }
 function mkInput(initialValue, onChange, api) {
   const inp = document.createElement('textarea'); inp.className = 'be-autogrow'; inp.rows = 1;
