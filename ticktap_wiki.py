@@ -49,6 +49,9 @@ SECTION_EDIT_MAX  = 4              # maximum heading level to show [edit] sectio
 MARKUP_BAR_DESKTOP = False          # show the editor markup toolbar on desktop
 MARKUP_BAR_MOBILE  = True          # show the editor markup toolbar on mobile (≤700 px)
 
+EDIT_PAGE_PADDING  = "2px"        # left/right padding of the edit page layout (CSS length, e.g. "0rem", "1rem", "16px")
+READ_PAGE_PADDING  = "2px"       # left/right padding of the read page layout (CSS length, e.g. "0rem", "1rem", "16px")
+
 # ── colours ──────────────────────────────────────────────────────────────────
 # Light-mode palette
 LIGHT_NAV_BG       = "#2c3e50"   # navigation bar background; also used for links & toolbar text
@@ -618,6 +621,8 @@ nav form{margin-left:0}nav input[type=search]{padding:.3rem .6rem;border-radius:
 .layout{display:flex;max-width:1100px;margin:1rem auto;gap:1rem;padding:0 1rem}
 .content{flex:1;min-width:0;background:#fff;padding:1rem;border-radius:4px;border:1px solid #ddd}
 .content.edit-page{padding:0;border:none;background:transparent}
+.layout.edit-layout{padding:0 __EDIT_PAD__}
+.layout.read-layout{padding:0 __READ_PAD__}
 .toc{width:220px;flex-shrink:0;position:sticky;top:1rem;align-self:flex-start;background:#fff;border:1px solid #ddd;border-radius:4px;padding:.6rem;font-size:.85rem}
 .toc h3{font-size:.9rem;margin-bottom:.4rem;display:flex;justify-content:space-between}
 .toc ul{list-style:none;padding-left:0}.toc li{padding:.15rem 0}
@@ -886,6 +891,8 @@ _CSS_FINAL  = (CSS
     .replace('__ITEM_SP__', ITEM_SPACING)
     .replace('__MB_DESKTOP__', 'flex' if MARKUP_BAR_DESKTOP else 'none')
     .replace('__MB_MOBILE__',  'flex' if MARKUP_BAR_MOBILE  else 'none')
+    .replace('__EDIT_PAD__',   EDIT_PAGE_PADDING)
+    .replace('__READ_PAD__',   READ_PAGE_PADDING)
     .replace('#2c3e50', LIGHT_NAV_BG)
     .replace('#ecf0f1', LIGHT_TOOLBAR_BG)
     .replace('#3498db', ACCENT_COLOR)
@@ -1455,7 +1462,7 @@ def view(request: Request, name: str, _auth: None = Depends(require_auth)):
         f'border-radius:50%;background:#27ae60;color:#fff;border:none;font-size:1.5rem;'
         f'cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,.3);line-height:1">+</button>'
     )
-    body = f'{toolbar}{todo_bar}{fab}<div class="layout"><div class="content">{rendered}</div>{toc_html(headings)}</div>'
+    body = f'{toolbar}{todo_bar}{fab}<div class="layout read-layout"><div class="content">{rendered}</div>{toc_html(headings)}</div>'
     return HTMLResponse(shell(name.split("/")[-1], body, request=request))
 
 
@@ -1477,7 +1484,7 @@ def edit_section_get(request: Request, name: str, idx: int, _auth: None = Depend
     anchor = _compute_anchor_for_line(src, start_line)
     content = html.escape("\n".join(src_lines[start_line:end_line]))
     frag = f"#{anchor}" if anchor else ""
-    body = (f'<div class="layout"><div class="content edit-page">{breadcrumb(name)}'
+    body = (f'<div class="layout edit-layout"><div class="content edit-page">{breadcrumb(name)}'
             f'<h2>Edit section</h2>'
             f'<form method="post"><div class="edit-toolbar">'
             f'<button type="submit">Save section</button>'
@@ -1529,8 +1536,8 @@ def edit_get(request: Request, name: str, _auth: None = Depends(require_auth)):
     content = html.escape(src)
     ns_for_upload = "/".join(name.split("/")[:-1])
     upload_href = f"/upload/{ns_for_upload}" if ns_for_upload else "/upload"
-    body = (f'<div class="layout"><div class="content edit-page">{breadcrumb(name)}'
-            f'<div class="edit-toolbar">')
+    body = (f'<div class="layout edit-layout"><div class="content edit-page">{breadcrumb(name)}'
+            f'<div class="edit-toolbar">'
             f'<strong>{html.escape(name.split("/")[-1])}</strong>'
             f'<button form="ef" type="submit">Save</button>'
             f'<a href="/wiki/{name}">Cancel</a>'
