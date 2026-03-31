@@ -1921,8 +1921,10 @@ async def rename_post(name: str, new_name: str = Form(""), _auth: None = Depends
         return HTMLResponse(f"A page named \u2018{html.escape(new_name)}\u2019 already exists", 400)
 
     # Rewrite all [[...]] links across all pages that resolve to `name`
-    new_colon = new_name.replace("/", ":")   # canonical colon form for rewritten links
+    # For root pages (new_ns==""), cross-namespace links must use [[:NewPage]].
+    # For namespaced pages, [[ns:SubPage]] is unambiguous from any namespace.
     new_ns    = "/".join(new_name.split("/")[:-1])
+    new_colon = (":" + new_name) if not new_ns else new_name.replace("/", ":")
 
     def _rewrite_content(content: str, page_ns: str) -> str:
         def repl(m: re.Match) -> str:
@@ -1964,6 +1966,7 @@ async def rename_post(name: str, new_name: str = Form(""), _auth: None = Depends
         page_ns  = "/".join(page_rel.split("/")[:-1])
         new_content = _rewrite_content(content, page_ns)
         if new_content != content:
+            tmp = None
             try:
                 tmp = wiki_file.with_suffix(f".{secrets.token_hex(4)}.tmp")
                 tmp.write_text(new_content, encoding="utf-8", newline="\n")
@@ -1971,7 +1974,8 @@ async def rename_post(name: str, new_name: str = Form(""), _auth: None = Depends
             except OSError:
                 pass  # best-effort; don't abort the rename for a failed rewrite
             finally:
-                tmp.unlink(missing_ok=True)
+                if tmp is not None:
+                    tmp.unlink(missing_ok=True)
 
     # Move the page file
     new_path.parent.mkdir(parents=True, exist_ok=True)
