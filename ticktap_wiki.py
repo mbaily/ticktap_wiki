@@ -477,7 +477,7 @@ def parse(src: str, name: str = "", section_edit: bool = True) -> tuple[str, lis
             state_cls = " todo-done" if state == "x" else (" todo-inprogress" if state == "~" else "")
             indent_style = f' style="padding-left:{todo_level * 1.5}em"' if todo_level else ''
             del_btn = f' <a class="line-del" href="#" data-line="{i + meta_offset}" data-name="{html.escape(name)}">\u274c</a>' if INLINE_DELETE and section_edit and name else ''
-            out.append(f'<p class="todo{state_cls}" draggable="true" data-line="{i + meta_offset}" data-state="{state}" data-indent="{todo_indent}" data-prefix="[ ] "{indent_style}><input type="checkbox"{checked} data-line="{i + meta_offset}" data-name="{html.escape(name)}"> {text}{del_btn}</p>')
+            out.append(f'<p class="todo{state_cls}" data-line="{i + meta_offset}" data-state="{state}" data-indent="{todo_indent}" data-prefix="[ ] "{indent_style}><input type="checkbox"{checked} data-line="{i + meta_offset}" data-name="{html.escape(name)}"> {text}{del_btn}</p>')
             continue
 
         # table rows — DokuWiki syntax: lines starting with | or ^
@@ -686,9 +686,6 @@ input[type=checkbox]:checked::after{content:'';position:absolute;left:25%;top:5%
   .content{padding:.7rem}
   .login-box{margin:1rem auto;padding:1.2rem}
   input[type=checkbox]{width:1.4em;height:1.4em}
-  p.todo[draggable]{cursor:default;-webkit-user-drag:none}
-  p.todo.drag-over-before{border-top:none!important}
-  p.todo.drag-over-after{border-bottom:none!important}
   .markup-bar{display:__MB_MOBILE__;gap:.35rem}
   .markup-bar button{font-size:1.1rem;padding:.4rem .65rem;min-width:2.4rem}
 }
@@ -700,7 +697,6 @@ mark{background:#fff3cd;padding:0 .1rem;border-radius:2px}
 .search-hit{font-size:.85rem;font-family:monospace;color:#444;padding:.15rem .3rem;border-left:3px solid #ddd;margin:.2rem 0}
 .pin-bar{background:#243447;padding:.3rem 1rem;display:flex;gap:.5rem;flex-wrap:wrap;align-items:center;font-size:.85rem}
 .pin-bar a{color:#8ab4f8;text-decoration:none;background:rgba(255,255,255,.08);padding:.15rem .5rem;border-radius:3px}.pin-bar a:hover{text-decoration:underline}
-p.todo[draggable]{cursor:grab}p.todo.drag-over-before{border-top:2px solid #3498db}p.todo.drag-over-after{border-bottom:2px solid #3498db}
 .line-del{font-size:.7rem;color:#c0392b;text-decoration:none;margin-left:.4rem;opacity:.3;vertical-align:middle;position:relative;top:-.2em}@media(hover:hover){.line-del:hover{opacity:1}}
 .line-del.confirm{opacity:1;font-size:.75rem;background:#c0392b;color:#fff;padding:.1rem .4rem;border-radius:3px}
 """
@@ -1383,7 +1379,6 @@ def view(request: Request, name: str, _auth: None = Depends(require_auth)):
         f'if(_qtodoPrefix[0]==="["){{'
         f'var newEl=document.createElement("p");'
         f'newEl.className="todo";'
-        f'newEl.draggable=true;'
         f'newEl.dataset.line=data.line;'
         f'newEl.dataset.indent=_qtodoIndent;'
         f'newEl.dataset.prefix=_qtodoPrefix;'
@@ -1432,44 +1427,12 @@ def view(request: Request, name: str, _auth: None = Depends(require_auth)):
         f'}});'
         f'document.addEventListener("DOMContentLoaded",function(){{'
         f'document.querySelector(".content").addEventListener("click",function(e){{'
+        f'if(window.getSelection&&window.getSelection().toString().length>0)return;'
         f'var t=e.target;'
         f'while(t&&t!==this){{if(t.tagName==="A")return;if(t.tagName==="INPUT"&&t.type==="checkbox")return;t=t.parentElement;}}'
         f'var el=e.target;'
         f'while(el&&el!==this){{if(el.dataset&&el.dataset.line!==undefined){{qtodoSelect(el);return;}}el=el.parentElement;}}'
         f'}});}});'
-        f'(function(){{var _drag=null;'
-        f'document.addEventListener("dragstart",function(e){{'
-        f'var el=e.target.closest("p.todo[draggable]");if(!el)return;'
-        f'_drag=el;setTimeout(function(){{el.style.opacity="0.4";}},0);'
-        f'}});'
-        f'document.addEventListener("dragend",function(){{'
-        f'if(_drag){{_drag.style.opacity="";_drag=null;}}'
-        f'document.querySelectorAll("p.todo.drag-over-before,p.todo.drag-over-after").forEach(function(el){{el.classList.remove("drag-over-before","drag-over-after");}});'
-        f'}});'
-        f'document.addEventListener("dragover",function(e){{'
-        f'var el=e.target.closest("p.todo[draggable]");'
-        f'if(el&&el!==_drag){{e.preventDefault();'
-        f'document.querySelectorAll("p.todo.drag-over-before,p.todo.drag-over-after").forEach(function(t){{t.classList.remove("drag-over-before","drag-over-after");}});'
-        f'var r=el.getBoundingClientRect();'
-        f'el.classList.add(e.clientY<r.top+r.height/2?"drag-over-before":"drag-over-after");'
-        f'}}else if(_drag&&e.target.closest(".content")){{e.preventDefault();}}'
-        f'}});'
-        f'document.addEventListener("drop",function(e){{'
-        f'if(!_drag)return;'
-        f'var target=e.target.closest("p.todo[draggable]");'
-        f'document.querySelectorAll("p.todo.drag-over-before,p.todo.drag-over-after").forEach(function(t){{t.classList.remove("drag-over-before","drag-over-after");}});'
-        f'if(target&&target!==_drag){{e.preventDefault();'
-        f'var rect=target.getBoundingClientRect();'
-        f'if(e.clientY<rect.top+rect.height/2)target.insertAdjacentElement("beforebegin",_drag);'
-        f'else target.insertAdjacentElement("afterend",_drag);'
-        f'}}else if(!target&&e.target.closest(".content")){{e.preventDefault();'
-        f'var todos=document.querySelectorAll(".content p.todo[data-line]");'
-        f'var last=todos[todos.length-1];'
-        f'if(last&&last!==_drag)last.insertAdjacentElement("afterend",_drag);'
-        f'}}else{{return;}}'
-        f'var order=Array.from(document.querySelectorAll(".content p.todo[data-line]")).map(function(el){{return parseInt(el.dataset.line,10);}});'
-        f'fetch("/reorder-todos/"+_wikiPage,{{method:"POST",headers:{{"Content-Type":"application/json"}},body:JSON.stringify({{order:order}})}}).then(function(){{var so=order.slice().sort(function(a,b){{return a-b;}});Array.from(document.querySelectorAll(".content p.todo[data-line]"),(function(el,i){{el.dataset.line=so[i];var cb=el.querySelector("input[data-line]");if(cb)cb.dataset.line=so[i];}}));}});'
-        f'}});}})();'
         f'</script>'
     )
     fab = (

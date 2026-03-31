@@ -419,12 +419,10 @@ function makeDefaultBlock(type, level) {
 function _quickInsertType(block) {
   if (!block) return null;
   switch (block.type) {
-    case 'todo':    return { type: 'todo', label: '+ ☐ Todo' };
-    case 'bullet':  return { type: 'bullet', label: '+ • Bullet' };
-    case 'ordered': return { type: 'ordered', label: '+ 1. Ordered' };
-    case 'heading': return { type: 'para', label: '+ ¶ Paragraph' };
-    case 'hr':      return { type: 'para', label: '+ ¶ Paragraph' };
-    default:        return null;
+    case 'todo':    return { type: 'todo', label: '+ ☐' };
+    case 'bullet':  return { type: 'bullet', label: '+ •' };
+    case 'ordered': return { type: 'ordered', label: '+ 1.' };
+    default:        return { type: 'para', label: '+ ¶' };
   }
 }
 
@@ -585,9 +583,20 @@ function injectStyles() {
 .be-picker-quick { font-weight: bold; background: rgba(52,152,219,.08) !important; }
 .be-picker-sep { height: 1px; background: #ddd; margin: .2rem .6rem; }
 
+/* Quick insert below button */
+.be-quick-ins {
+  flex-shrink: 0; width: 1.4rem; height: 1.4rem; border-radius: 50%;
+  border: 1px solid #ccc; background: none; cursor: pointer;
+  font-size: .85rem; line-height: 1; padding: 0; color: #999;
+  display: flex; align-items: center; justify-content: center; margin-top: .1rem;
+}
+.be-quick-ins:hover { border-color: #27ae60; color: #27ae60; background: rgba(39,174,96,.08); }
+.be-quick-ins-disabled { opacity: .2; cursor: default; pointer-events: none; }
+
 /* Mobile grip size */
 @media (max-width: 700px) {
   .be-grip { font-size: 1.6rem; padding: .4rem .3rem 0; }
+  .be-quick-ins { width: 1.9rem; height: 1.9rem; font-size: 1.1rem; }
 }
 
 /* Dark mode */
@@ -636,7 +645,7 @@ function init() {
 
   const loadingEl = document.createElement('div'); loadingEl.className = 'be-loading'; loadingEl.textContent = 'Loading…'; root.appendChild(loadingEl);
 
-  let blocks = [], anchor = '';
+  let blocks = [], anchor = '', initialMarkup = '';
   const undo = makeUndoStack(100);
   const cardsEl = document.createElement('div'); cardsEl.id = 'be-cards'; root.appendChild(cardsEl);
 
@@ -651,10 +660,12 @@ function init() {
   const btnDel = document.createElement('button'); btnDel.textContent = '🗑'; btnDel.title = 'Delete';
   const btnSelAll = document.createElement('button'); btnSelAll.textContent = '☑'; btnSelAll.title = 'Select all';
   const btnSelNone = document.createElement('button'); btnSelNone.textContent = '☐'; btnSelNone.title = 'Deselect all';
+  const btnRestore = document.createElement('button'); btnRestore.textContent = '↺'; btnRestore.title = 'Restore original content (undo all edits this session)';
   bar.appendChild(barCount);
   bar.appendChild(btnInsAbove); bar.appendChild(btnInsBelow);
   bar.appendChild(btnType); bar.appendChild(btnIndentL); bar.appendChild(btnIndentR);
   bar.appendChild(btnDel); bar.appendChild(btnSelAll); bar.appendChild(btnSelNone);
+  bar.appendChild(btnRestore);
   document.body.appendChild(bar);
 
   // ── API ─────────────────────────────────────────────────────────────────────
@@ -666,6 +677,21 @@ function init() {
     deselectAll: function () { blocks.forEach(function (b) { b._selected = false; }); },
     syncSelection: syncSelection,
     rerender: function () { render(); },
+    quickInsertBelow: function (block, type) {
+      const idx = blocks.indexOf(block);
+      if (idx < 0) return;
+      undo.push(blocksToMarkup(blocks));
+      const nb = makeDefaultBlock(type);
+      if (block.indent != null && nb.indent != null) nb.indent = block.indent;
+      api.deselectAll();
+      nb._selected = true;
+      blocks.splice(idx + 1, 0, nb);
+      render(); syncUndoButtons();
+      setTimeout(function () {
+        const nc = cardsEl.querySelector('[data-id="' + nb._id + '"]');
+        if (nc) { const inp = nc.querySelector('textarea'); if (inp) inp.focus(); }
+      }, 50);
+    },
   };
 
   function syncSelection() {
@@ -691,18 +717,22 @@ function init() {
   function doInsert(above) {
     const sel = api.getSelection();
     if (sel.length !== 1) return;
-    const idx = blocks.indexOf(sel[0]);
+    const ref = sel[0];
+    const idx = blocks.indexOf(ref);
     if (idx < 0) return;
     openTypePicker(above ? btnInsAbove : btnInsBelow, function (type, level) {
       undo.push(blocksToMarkup(blocks));
       const nb = makeDefaultBlock(type, level);
+      if (!above && ref.indent != null && nb.indent != null) nb.indent = ref.indent;
+      api.deselectAll();
+      nb._selected = true;
       blocks.splice(above ? idx : idx + 1, 0, nb);
       render(); syncUndoButtons();
       setTimeout(function () {
         const nc = cardsEl.querySelector('[data-id="' + nb._id + '"]');
         if (nc) { const inp = nc.querySelector('textarea'); if (inp) inp.focus(); }
       }, 50);
-    }, sel[0]);
+    }, ref);
   }
   btnInsAbove.addEventListener('click', function () { doInsert(true); });
   btnInsBelow.addEventListener('click', function () { doInsert(false); });
@@ -747,6 +777,12 @@ function init() {
 
   btnSelAll.addEventListener('click', function () { blocks.forEach(function (b) { b._selected = true; }); syncSelection(); });
   btnSelNone.addEventListener('click', function () { api.deselectAll(); syncSelection(); });
+  btnRestore.addEventListener('click', function () {
+    if (!confirm('Restore page to the state when you opened this editor?')) return;
+    undo.push(blocksToMarkup(blocks));
+    blocks = markupToBlocks(initialMarkup).map(assignId);
+    render(); syncUndoButtons();
+  });
 
   function render() {
     cardsEl.innerHTML = '';
@@ -784,7 +820,8 @@ function init() {
     .then(function (data) {
       loadingEl.remove(); anchor = data.anchor || '';
       if (isSect && anchor) cancelBtn.href = '/wiki/' + pageName + '#' + anchor;
-      blocks = markupToBlocks(data.content || '').map(assignId);
+      initialMarkup = data.content || '';
+      blocks = markupToBlocks(initialMarkup).map(assignId);
       undo.push(blocksToMarkup(blocks)); render(); saveBtn.disabled = false; syncUndoButtons();
     })
     .catch(function (err) { loadingEl.remove(); const e = document.createElement('div'); e.className = 'be-error'; e.textContent = 'Load failed: ' + err.message; root.appendChild(e); });
