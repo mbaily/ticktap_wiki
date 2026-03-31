@@ -99,7 +99,8 @@ function makeUndoStack(maxSize) {
   function undo() { if (pos > 0) { pos--; return stack[pos]; } return null; }
   function redo() { if (pos < stack.length - 1) { pos++; return stack[pos]; } return null; }
   function pushDebounced(getMarkup, delay) { clearTimeout(debounceTimer); debounceTimer = setTimeout(function () { push(getMarkup()); }, delay || 800); }
-  return { push, current, canUndo, canRedo, undo, redo, pushDebounced };
+  function cancelDebounce() { clearTimeout(debounceTimer); }
+  return { push, current, canUndo, canRedo, undo, redo, pushDebounced, cancelDebounce };
 }
 
 // ─── DRAG & DROP (mouse + touch) ───────────────────────────────────────────────
@@ -688,9 +689,9 @@ function init() {
 
   // ── API ─────────────────────────────────────────────────────────────────────
   const api = {
-    onChange: function () { undo.pushDebounced(function () { return blocksToMarkup(blocks); }, 800); },
-    pushUndo: function () { undo.push(blocksToMarkup(blocks)); syncUndoButtons(); },
-    pushUndoImmediate: function () { undo.push(blocksToMarkup(blocks)); syncUndoButtons(); },
+    onChange: function () { undo.pushDebounced(function () { push_and_sync(); }, 800); },
+    pushUndo: function () { push_and_sync(); },
+    pushUndoImmediate: function () { push_and_sync(); },
     getSelection: function () { return blocks.filter(function (b) { return b._selected; }); },
     deselectAll: function () { blocks.forEach(function (b) { b._selected = false; }); },
     syncSelection: syncSelection,
@@ -711,6 +712,8 @@ function init() {
       }, 50);
     },
   };
+
+  function push_and_sync() { undo.push(blocksToMarkup(blocks)); syncUndoButtons(); }
 
   function syncSelection() {
     const sel = api.getSelection();
@@ -811,8 +814,8 @@ function init() {
 
   function syncUndoButtons() { undoBtn.disabled = !undo.canUndo(); redoBtn.disabled = !undo.canRedo(); }
 
-  undoBtn.addEventListener('click', function () { const m = undo.undo(); if (m !== null) { blocks = markupToBlocks(m).map(assignId); render(); } syncUndoButtons(); });
-  redoBtn.addEventListener('click', function () { const m = undo.redo(); if (m !== null) { blocks = markupToBlocks(m).map(assignId); render(); } syncUndoButtons(); });
+  undoBtn.addEventListener('click', function () { undo.cancelDebounce(); const m = undo.undo(); if (m !== null) { blocks = markupToBlocks(m).map(assignId); render(); } syncUndoButtons(); });
+  redoBtn.addEventListener('click', function () { undo.cancelDebounce(); const m = undo.redo(); if (m !== null) { blocks = markupToBlocks(m).map(assignId); render(); } syncUndoButtons(); });
   document.addEventListener('keydown', function (e) {
     if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) { e.preventDefault(); undoBtn.click(); }
     else if ((e.ctrlKey || e.metaKey) && (e.key === 'Z' || (e.shiftKey && e.key === 'z'))) { e.preventDefault(); redoBtn.click(); }
