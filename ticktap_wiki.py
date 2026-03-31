@@ -761,7 +761,50 @@ document.querySelectorAll('textarea').forEach(ta=>{
   ta.addEventListener('keydown',e=>{
     if(e.key==='Tab'){e.preventDefault();const s=e.target.selectionStart;
       e.target.value=e.target.value.slice(0,s)+'  '+e.target.value.slice(e.target.selectionEnd);
-      e.target.selectionStart=e.target.selectionEnd=s+2;}
+      e.target.selectionStart=e.target.selectionEnd=s+2;return;}
+    // Smart list continuation only for the main markup editor
+    if(ta.id!=='ed')return;
+    const v=ta.value,pos=ta.selectionStart;
+    if(ta.selectionStart!==ta.selectionEnd)return;
+    // Find the start of the current line
+    const lineStart=v.lastIndexOf('\n',pos-1)+1;
+    const lineText=v.slice(lineStart,pos);
+    // Detect list prefix: optional indent spaces + (bullet/ordered/todo marker)
+    const m=lineText.match(/^( *)(\* |- |\[ \] |\[x\] |\[~\] )/);
+    if(!m)return;
+    const indent=m[1],prefix=m[2];
+    const afterPrefix=lineStart+indent.length+prefix.length;
+    if(e.key==='Enter'&&!e.shiftKey){
+      e.preventDefault();
+      // If the line contains only the prefix (empty item), clear the line instead
+      if(pos===afterPrefix&&lineText===indent+prefix){
+        ta.value=v.slice(0,lineStart)+v.slice(pos);
+        ta.selectionStart=ta.selectionEnd=lineStart;
+      }else{
+        // Normalise todo prefix to empty state
+        const newPrefix=prefix==='[x] '||prefix==='[~] '?'[ ] ':prefix;
+        const ins='\n'+indent+newPrefix;
+        ta.value=v.slice(0,pos)+ins+v.slice(pos);
+        ta.selectionStart=ta.selectionEnd=pos+ins.length;
+      }
+      ta.dispatchEvent(new Event('input'));
+      return;
+    }
+    if(e.key===' '&&pos===afterPrefix){
+      e.preventDefault();
+      // Insert 2-space indent at the line start
+      ta.value=v.slice(0,lineStart)+'  '+v.slice(lineStart);
+      ta.selectionStart=ta.selectionEnd=pos+2;
+      ta.dispatchEvent(new Event('input'));
+      return;
+    }
+    if(e.key==='Backspace'&&pos===afterPrefix&&indent.length>=2){
+      e.preventDefault();
+      ta.value=v.slice(0,lineStart)+v.slice(lineStart+2);
+      ta.selectionStart=ta.selectionEnd=pos-2;
+      ta.dispatchEvent(new Event('input'));
+      return;
+    }
   });
 });
 document.addEventListener('click',function(e){
