@@ -1900,7 +1900,7 @@ def rename_get(request: Request, name: str, _auth: None = Depends(require_auth))
 
 
 @app.post("/rename/{name:path}", response_class=HTMLResponse)
-async def rename_post(name: str, new_name: str = Form(""), _auth: None = Depends(require_auth)):
+async def rename_post(request: Request, name: str, new_name: str = Form(""), _auth: None = Depends(require_auth)):
     name = normalize_name(name)
     new_name = normalize_name(new_name.strip())
     try:
@@ -1981,15 +1981,28 @@ async def rename_post(name: str, new_name: str = Form(""), _auth: None = Depends
     new_path.parent.mkdir(parents=True, exist_ok=True)
     old_path.rename(new_path)
 
-    # Move attic snapshots (best-effort)
+    # Move attic snapshots (best-effort — failure doesn't block the rename)
+    attic_warning = ""
     try:
         old_attic = _attic_page_dir(name)
         if old_attic.is_dir():
             new_attic = _attic_page_dir(new_name)
             new_attic.parent.mkdir(parents=True, exist_ok=True)
             old_attic.rename(new_attic)
-    except Exception:
-        pass
+    except Exception as exc:
+        attic_warning = (f'<div class="notice" style="background:#fff3cd;border-color:#ffc107;margin-top:.8rem">'
+                         f'&#9888; Page renamed successfully, but history snapshots could not be moved '
+                         f'(<code>{html.escape(str(exc))}</code>). '
+                         f'Old snapshots remain at <code>attic/{html.escape(name)}/</code>.</div>')
+
+    if attic_warning:
+        body = (f'<div class="layout"><div class="content">'
+                f'<h1>Page renamed</h1>'
+                f'<p><strong>{html.escape(name)}</strong> \u2192 '
+                f'<a href="/wiki/{html.escape(new_name)}">{html.escape(new_name)}</a></p>'
+                f'{attic_warning}'
+                f'</div></div>')
+        return HTMLResponse(shell(f"Renamed \u2014 {new_name}", body, request=request))
 
     return RedirectResponse(f"/wiki/{new_name}", status_code=303)
 
