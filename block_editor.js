@@ -92,7 +92,7 @@ function blocksToMarkup(blocks) { return blocks.map(serializeBlock).join('\n'); 
 function makeUndoStack(maxSize) {
   maxSize = maxSize || 100;
   let stack = [], pos = -1, debounceTimer = null;
-  function push(markup) { stack = stack.slice(0, pos + 1); stack.push(markup); if (stack.length > maxSize) stack.shift(); pos = stack.length - 1; }
+  function push(markup) { stack = stack.slice(0, pos + 1); if (stack.length > 0 && stack[stack.length - 1] === markup) return; stack.push(markup); if (stack.length > maxSize) stack.shift(); pos = stack.length - 1; }
   function current() { return pos >= 0 ? stack[pos] : null; }
   function canUndo() { return pos > 0; }
   function canRedo() { return pos < stack.length - 1; }
