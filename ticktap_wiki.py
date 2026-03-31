@@ -617,6 +617,7 @@ nav form{margin-left:0}nav input[type=search]{padding:.3rem .6rem;border-radius:
 .toolbar a,.toolbar button{color:#2c3e50;background:none;border:1px solid #aaa;padding:.2rem .5rem;border-radius:3px;cursor:pointer;font-size:.85rem;text-decoration:none}
 .layout{display:flex;max-width:1100px;margin:1rem auto;gap:1rem;padding:0 1rem}
 .content{flex:1;min-width:0;background:#fff;padding:1rem;border-radius:4px;border:1px solid #ddd}
+.content.edit-page{padding:0;border:none;background:transparent}
 .toc{width:220px;flex-shrink:0;position:sticky;top:1rem;align-self:flex-start;background:#fff;border:1px solid #ddd;border-radius:4px;padding:.6rem;font-size:.85rem}
 .toc h3{font-size:.9rem;margin-bottom:.4rem;display:flex;justify-content:space-between}
 .toc ul{list-style:none;padding-left:0}.toc li{padding:.15rem 0}
@@ -1476,7 +1477,7 @@ def edit_section_get(request: Request, name: str, idx: int, _auth: None = Depend
     anchor = _compute_anchor_for_line(src, start_line)
     content = html.escape("\n".join(src_lines[start_line:end_line]))
     frag = f"#{anchor}" if anchor else ""
-    body = (f'<div class="layout"><div class="content">{breadcrumb(name)}'
+    body = (f'<div class="layout"><div class="content edit-page">{breadcrumb(name)}'
             f'<h2>Edit section</h2>'
             f'<form method="post"><div class="edit-toolbar">'
             f'<button type="submit">Save section</button>'
@@ -1528,8 +1529,8 @@ def edit_get(request: Request, name: str, _auth: None = Depends(require_auth)):
     content = html.escape(src)
     ns_for_upload = "/".join(name.split("/")[:-1])
     upload_href = f"/upload/{ns_for_upload}" if ns_for_upload else "/upload"
-    body = (f'<div class="layout"><div class="content">{breadcrumb(name)}'
-            f'<div class="edit-toolbar">'
+    body = (f'<div class="layout"><div class="content edit-page">{breadcrumb(name)}'
+            f'<div class="edit-toolbar">')
             f'<strong>{html.escape(name.split("/")[-1])}</strong>'
             f'<button form="ef" type="submit">Save</button>'
             f'<a href="/wiki/{name}">Cancel</a>'
