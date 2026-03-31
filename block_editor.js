@@ -94,10 +94,12 @@ function makeUndoStack(maxSize) {
   let stack = [], pos = -1, debounceTimer = null;
   function push(markup) { stack = stack.slice(0, pos + 1); stack.push(markup); if (stack.length > maxSize) stack.shift(); pos = stack.length - 1; }
   function current() { return pos >= 0 ? stack[pos] : null; }
+  function canUndo() { return pos > 0; }
+  function canRedo() { return pos < stack.length - 1; }
   function undo() { if (pos > 0) { pos--; return stack[pos]; } return null; }
   function redo() { if (pos < stack.length - 1) { pos++; return stack[pos]; } return null; }
   function pushDebounced(getMarkup, delay) { clearTimeout(debounceTimer); debounceTimer = setTimeout(function () { push(getMarkup()); }, delay || 800); }
-  return { push, current, undo, redo, pushDebounced };
+  return { push, current, canUndo, canRedo, undo, redo, pushDebounced };
 }
 
 // ─── DRAG & DROP (mouse + touch) ───────────────────────────────────────────────
@@ -371,7 +373,7 @@ function makeParaLine(block, idx, content, api) {
       const nextInp = content.querySelectorAll('.be-para-line')[idx + 1];
       if (nextInp) { nextInp.focus(); nextInp.setSelectionRange(0, 0); }
       api.onChange(); api.pushUndoImmediate();
-    } else if (e.key === 'Backspace' && inp.selectionStart === 0 && inp.selectionEnd === 0 && block.lines.length > 1) {
+    } else if (e.key === 'Backspace' && inp.selectionStart === 0 && inp.selectionEnd === 0 && idx > 0 && block.lines.length > 1) {
       e.preventDefault();
       const mergePos = block.lines[idx - 1].length;
       block.lines[idx - 1] += block.lines[idx];
@@ -391,7 +393,6 @@ function _reindexPara(block, content, api) {
   // Rebuild entirely from block.lines so count always matches data
   block.lines.forEach(function (line, i) {
     const n = makeParaLine(block, i, content, api);
-    n.value = line;
     content.appendChild(n);
     setTimeout(function () { autoGrow(n); }, 0);
   });
@@ -808,7 +809,7 @@ function init() {
     syncSelection();
   }
 
-  function syncUndoButtons() { undoBtn.disabled = undo.current() === null; redoBtn.disabled = false; }
+  function syncUndoButtons() { undoBtn.disabled = !undo.canUndo(); redoBtn.disabled = !undo.canRedo(); }
 
   undoBtn.addEventListener('click', function () { const m = undo.undo(); if (m !== null) { blocks = markupToBlocks(m).map(assignId); render(); } syncUndoButtons(); });
   redoBtn.addEventListener('click', function () { const m = undo.redo(); if (m !== null) { blocks = markupToBlocks(m).map(assignId); render(); } syncUndoButtons(); });
