@@ -98,7 +98,7 @@ function makeUndoStack(maxSize) {
   function canRedo() { return pos < stack.length - 1; }
   function undo() { if (pos > 0) { pos--; return stack[pos]; } return null; }
   function redo() { if (pos < stack.length - 1) { pos++; return stack[pos]; } return null; }
-  function pushDebounced(getMarkup, delay) { clearTimeout(debounceTimer); debounceTimer = setTimeout(function () { push(getMarkup()); }, delay || 800); }
+  function pushDebounced(callback, delay) { clearTimeout(debounceTimer); debounceTimer = setTimeout(callback, delay || 800); }
   function cancelDebounce() { clearTimeout(debounceTimer); }
   return { push, current, canUndo, canRedo, undo, redo, pushDebounced, cancelDebounce };
 }
@@ -788,12 +788,12 @@ function init() {
   btnIndentL.addEventListener('click', function () {
     undo.push(blocksToMarkup(blocks));
     api.getSelection().forEach(function (b) { if (b.indent >= 2) b.indent -= 2; });
-    api.onChange(); api.pushUndoImmediate(); render();
+    render(); syncUndoButtons();
   });
   btnIndentR.addEventListener('click', function () {
     undo.push(blocksToMarkup(blocks));
     api.getSelection().forEach(function (b) { if (b.indent != null) b.indent += 2; });
-    api.onChange(); api.pushUndoImmediate(); render();
+    render(); syncUndoButtons();
   });
 
   btnSelAll.addEventListener('click', function () { blocks.forEach(function (b) { b._selected = true; }); syncSelection(); });
