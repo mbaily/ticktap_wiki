@@ -337,7 +337,7 @@ function fillContent(block, content, api) {
     case 'meta': {
       const ta = document.createElement('textarea'); ta.className = 'be-meta-area';
       ta.value = block.lines.join('\n'); ta.rows = Math.max(2, block.lines.length + 1); ta.spellcheck = false;
-      ta.addEventListener('input', function () { block.lines = ta.value.split('\n'); autoGrow(ta); api.onChange(); });
+      ta.addEventListener('input', function () { block.lines = ta.value === '' ? [] : ta.value.split('\n'); autoGrow(ta); api.onChange(); });
       ta.addEventListener('blur', function () { if (!_rendering) api.pushUndo(); });
       content.appendChild(ta); break;
     }
@@ -804,8 +804,9 @@ function init() {
   btnSelNone.addEventListener('click', function () { api.deselectAll(); syncSelection(); });
   btnRestore.addEventListener('click', function () {
     if (!confirm('Restore page to the state when you opened this editor?')) return;
-    undo.push(blocksToMarkup(blocks));
+    undo.push(blocksToMarkup(blocks));           // checkpoint: pre-restore state
     blocks = markupToBlocks(initialMarkup).map(assignId);
+    undo.push(blocksToMarkup(blocks));           // record restored state as current
     render(); syncUndoButtons();
   });
 
