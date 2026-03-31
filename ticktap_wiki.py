@@ -1357,11 +1357,12 @@ def view(request: Request, name: str, _auth: None = Depends(require_auth)):
                f'<span style="margin-left:auto;font-size:.8rem;color:#666">Modified: {mtime}</span>'
                f'<a href="/block-edit/{name}" class="sect-edit" title="Block editor">&#9783;</a>'
                f'<a href="/edit/{name}">[edit page]</a>'
-               + (f'<a href="/history/{name}">[history]</a>' if VERSIONING_ENABLED else '') +
+               + (f'<a href="/history/{name}" title="History" style="font-size:1rem">&#128336;</a>' if VERSIONING_ENABLED else '') +
+               f'<a href="/rename/{html.escape(name)}" title="Rename page" style="font-size:1rem">&#9999;</a>'
                f'<form method="post" action="/pin/{html.escape(name)}" style="display:inline">'
                f'<button type="submit" title="{pin_title}" style="padding:.2rem .4rem;font-size:.9rem;background:none;border:1px solid #aaa;border-radius:3px;cursor:pointer">{pin_icon}</button>'
                f'</form>'
-               f'<a href="/delete/{name}" style="color:#c0392b">[delete]</a></div>')
+               f'<a href="/delete/{name}" title="Delete page" style="color:#c0392b;font-size:1rem">&#128465;</a></div>')
     todo_bar = (
         f'<div id="qtodo-bar" style="display:none;position:fixed;bottom:0;left:0;right:0;'
         f'background:#2c3e50;color:#fff;padding:.5rem 1rem;align-items:center;'
@@ -1869,6 +1870,124 @@ def search(request: Request, q: str = "", _auth: None = Depends(require_auth)):
             f'{"".join(results) or "<p>No results found.</p>"}'
             f'</div></div>')
     return HTMLResponse(shell(f"Search: {q}", body, search_q=q, request=request))
+
+
+@app.get("/rename/{name:path}", response_class=HTMLResponse)
+def rename_get(request: Request, name: str, _auth: None = Depends(require_auth)):
+    name = normalize_name(name)
+    try:
+        p = page_path(name)
+    except ValueError:
+        return HTMLResponse("Invalid page name", 400)
+    if not p.exists():
+        return HTMLResponse("Page not found", 404)
+    display = html.escape(name)
+    body = (f'<div class="layout"><div class="content">'
+            f'<h1>&#9999; Rename page</h1>'
+            f'<p>Current name: <strong>{display}</strong></p>'
+            f'<form method="post" style="margin-top:.8rem">'
+            f'<label style="display:block;margin-bottom:.5rem">New name:'
+            f'<input type="text" name="new_name" value="{display}" required autofocus '
+            f'style="margin-left:.5rem;padding:.3rem .5rem;font-size:1rem;width:320px;max-width:100%">'
+            f'</label>'
+            f'<p class="notice" style="margin:.6rem 0;font-size:.85rem;color:#555">'
+            f'All links in all pages pointing to this page will be updated automatically.</p>'
+            f'<button type="submit" style="background:#2980b9;color:#fff;border-color:#1a5276">'
+            f'Rename</button>'
+            f'&nbsp;<a href="/wiki/{display}">Cancel</a>'
+            f'</form></div></div>')
+    return HTMLResponse(shell(f"Rename \u2014 {name}", body, request=request))
+
+
+@app.post("/rename/{name:path}", response_class=HTMLResponse)
+async def rename_post(name: str, new_name: str = Form(""), _auth: None = Depends(require_auth)):
+    name = normalize_name(name)
+    new_name = normalize_name(new_name.strip())
+    try:
+        old_path = page_path(name)
+    except ValueError:
+        return HTMLResponse("Invalid page name", 400)
+    if not old_path.exists():
+        return HTMLResponse("Page not found", 404)
+    if not new_name:
+        return HTMLResponse("New name is required", 400)
+    try:
+        new_path = page_path(new_name)
+    except ValueError:
+        return HTMLResponse("Invalid new page name — use only letters, digits, hyphens, underscores and / for namespaces", 400)
+    if name == new_name:
+        return RedirectResponse(f"/wiki/{name}", status_code=303)
+    if new_path.exists():
+        return HTMLResponse(f"A page named \u2018{html.escape(new_name)}\u2019 already exists", 400)
+
+    # Rewrite all [[...]] links across all pages that resolve to `name`
+    new_colon = new_name.replace("/", ":")   # canonical colon form for rewritten links
+    new_ns    = "/".join(new_name.split("/")[:-1])
+
+    def _rewrite_content(content: str, page_ns: str) -> str:
+        def repl(m: re.Match) -> str:
+            inner = m.group(1)
+            parts = inner.split("|", 1)
+            target = parts[0].strip()
+            label  = parts[1] if len(parts) > 1 else None
+            # Skip external and file links
+            if not target or target.startswith(("http://", "https://", "file:")):
+                return m.group(0)
+            # Resolve target to canonical page name
+            if target.startswith(":"):
+                url = target[1:].replace(":", "/")
+            elif ":" in target:
+                url = target.replace(":", "/")
+            else:
+                url = (page_ns + "/" + target).lstrip("/") if page_ns else target
+            try:
+                url = normalize_name(url)
+            except Exception:
+                return m.group(0)
+            if url != name:
+                return m.group(0)
+            # Choose minimal link form: relative if new page is in same namespace
+            if page_ns == new_ns:
+                new_target = new_name.split("/")[-1]
+            else:
+                new_target = new_colon
+            lbl = f"|{label}" if label is not None else ""
+            return f"[[{new_target}{lbl}]]"
+        return re.sub(r"\[\[(.+?)\]\]", repl, content)
+
+    for wiki_file in sorted(PAGES_DIR.rglob("*.wiki")):
+        try:
+            content = wiki_file.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        page_rel = str(wiki_file.relative_to(PAGES_DIR).with_suffix("")).replace("\\", "/")
+        page_ns  = "/".join(page_rel.split("/")[:-1])
+        new_content = _rewrite_content(content, page_ns)
+        if new_content != content:
+            try:
+                tmp = wiki_file.with_suffix(f".{secrets.token_hex(4)}.tmp")
+                tmp.write_text(new_content, encoding="utf-8", newline="\n")
+                tmp.replace(wiki_file)
+            except OSError:
+                pass  # best-effort; don't abort the rename for a failed rewrite
+            finally:
+                tmp.unlink(missing_ok=True)
+
+    # Move the page file
+    new_path.parent.mkdir(parents=True, exist_ok=True)
+    old_path.rename(new_path)
+
+    # Move attic snapshots (best-effort)
+    try:
+        old_attic = _attic_page_dir(name)
+        if old_attic.is_dir():
+            new_attic = _attic_page_dir(new_name)
+            new_attic.parent.mkdir(parents=True, exist_ok=True)
+            old_attic.rename(new_attic)
+    except Exception:
+        pass
+
+    return RedirectResponse(f"/wiki/{new_name}", status_code=303)
 
 
 @app.get("/delete/{name:path}", response_class=HTMLResponse)
