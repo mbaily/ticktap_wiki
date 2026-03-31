@@ -49,6 +49,27 @@ SECTION_EDIT_MAX  = 4              # maximum heading level to show [edit] sectio
 MARKUP_BAR_DESKTOP = False          # show the editor markup toolbar on desktop
 MARKUP_BAR_MOBILE  = True          # show the editor markup toolbar on mobile (≤700 px)
 
+# ── colours ──────────────────────────────────────────────────────────────────
+# Light-mode palette
+LIGHT_NAV_BG       = "#2c3e50"   # navigation bar background; also used for links & toolbar text
+LIGHT_TOOLBAR_BG   = "#ecf0f1"   # reader toolbar background & table header fill
+# Dark-mode palette  (only used when DARK_MODE = True)
+DARK_PAGE_BG       = "#0d0d0d"   # html/body background; also used for input field backgrounds
+DARK_PANEL_BG      = "#000000"   # content area, TOC, search cards, login box, preview panel
+DARK_PANEL_BORDER  = "#2a2a2a"   # content area and TOC border
+DARK_NAV_BG        = "#111111"   # navigation bar background; also used for login button
+DARK_TOOLBAR_BG    = "#222222"   # reader toolbar background, code block background, table headers
+DARK_BORDER        = "#333333"   # general border and separator colour (used throughout)
+DARK_ACCENT        = "#8ab4f8"   # link text, icon-button text, snippet text, tag pill text
+DARK_ACCENT_HOVER  = "#aecbfa"   # link hover colour
+DARK_PIN_BAR_BG    = "#0a0a0a"   # pinned-pages bar background
+DARK_PRE_BG        = "#141414"   # fenced code block (<pre>) background
+DARK_TABLE_ALT     = "#1e1e1e"   # alternating table row background
+DARK_TAG_BG        = "#252525"   # tag pill background
+DARK_TAG_HOVER     = "#2e2e2e"   # tag pill hover background
+# Accent colour used in both modes (hover highlight bar, drag-over indicator, selection outline)
+ACCENT_COLOR       = "#3498db"
+
 # Page-name template for the /today redirect.  Uses wiki link notation (colons for namespaces),
 # same as [[ns:PageName]] in markup.  Available tokens:
 #   {yyyy}=4-digit year  {yy}=2-digit year
@@ -684,7 +705,7 @@ nav{background:#0f3460}
 .toolbar a,.toolbar button{color:#8ab4f8;border-color:#2a3f6f}
 .edit-toolbar button,.edit-toolbar a{color:#cdd;border-color:#2a3f6f}
 .markup-bar button{color:#cdd;border-color:#2a3f6f}.markup-bar .mb-sep{background:#2a3f6f}
-textarea{-webkit-appearance:none;background:#1a1a2e;color:#cdd;border-color:#2a3f6f}
+textarea{-webkit-appearance:none;background:#000000;color:#cdd;border-color:#2a3f6f}
 input[type=text],input[type=password],input[type=search]{-webkit-appearance:none;background:#1a1a2e;color:#cdd;border-color:#2a3f6f}
 .preview-box{background:#16213e;border-color:#2a3f6f}
 .notice{background:#3a2e00;border-color:#7a6000;color:#ffd}
@@ -864,7 +885,26 @@ _CSS_FINAL  = (CSS
     .replace('__ITEM_SP__', ITEM_SPACING)
     .replace('__MB_DESKTOP__', 'flex' if MARKUP_BAR_DESKTOP else 'none')
     .replace('__MB_MOBILE__',  'flex' if MARKUP_BAR_MOBILE  else 'none')
-) + (CSS_DARK if DARK_MODE else "")
+    .replace('#2c3e50', LIGHT_NAV_BG)
+    .replace('#ecf0f1', LIGHT_TOOLBAR_BG)
+    .replace('#3498db', ACCENT_COLOR)
+) + (
+    CSS_DARK
+    .replace('#1a1a2e', DARK_PAGE_BG)
+    .replace('#16213e', DARK_PANEL_BG)
+    .replace('#2a2a4a', DARK_PANEL_BORDER)
+    .replace('#0f3460', DARK_NAV_BG)
+    .replace('#1e2a45', DARK_TOOLBAR_BG)
+    .replace('#2a3f6f', DARK_BORDER)
+    .replace('#8ab4f8', DARK_ACCENT)
+    .replace('#aecbfa', DARK_ACCENT_HOVER)
+    .replace('#0e1f33', DARK_PIN_BAR_BG)
+    .replace('#111827', DARK_PRE_BG)
+    .replace('#14192e', DARK_TABLE_ALT)
+    .replace('#1e3a4a', DARK_TAG_BG)
+    .replace('#254a5e', DARK_TAG_HOVER)
+    if DARK_MODE else ""
+)
 _CSS_HASH   = hashlib.sha256(_CSS_FINAL.encode()).hexdigest()[:12]
 _JS_HASH    = hashlib.sha256(JS.encode()).hexdigest()[:12]
 _ICON_ETAG  = '"' + hashlib.sha256(_FAVICON).hexdigest()[:12] + '"'
