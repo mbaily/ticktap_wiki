@@ -50,7 +50,7 @@ MARKUP_BAR_DESKTOP = False          # show the editor markup toolbar on desktop
 MARKUP_BAR_MOBILE  = True          # show the editor markup toolbar on mobile (≤700 px)
 
 EDIT_PAGE_PADDING  = "2px"        # left/right padding of the edit page layout (CSS length, e.g. "0rem", "1rem", "16px")
-READ_PAGE_PADDING  = "2px"       # left/right padding of the read page layout (CSS length, e.g. "0rem", "1rem", "16px")
+READ_PAGE_PADDING  = "0px"       # left/right padding of the read page layout (CSS length, e.g. "0rem", "1rem", "16px")
 
 # ── colours ──────────────────────────────────────────────────────────────────
 # Light-mode palette
