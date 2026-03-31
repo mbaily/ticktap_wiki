@@ -284,7 +284,7 @@ function fillContent(block, content, api) {
         e.stopPropagation();
         block.state = block.state === ' ' ? 'x' : (block.state === 'x' ? '~' : ' ');
         updateCbLabel();
-        api.onChange(); api.pushUndo();
+        api.pushUndo();
       });
       row.appendChild(cb);
       const inp = mkInput(block.text, function (v) { block.text = v; api.onChange(); }, api);
@@ -373,7 +373,7 @@ function makeParaLine(block, idx, content, api) {
       _reindexPara(block, content, api);
       const nextInp = content.querySelectorAll('.be-para-line')[idx + 1];
       if (nextInp) { nextInp.focus(); nextInp.setSelectionRange(0, 0); }
-      api.onChange(); api.pushUndoImmediate();
+      api.pushUndoImmediate();
     } else if (e.key === 'Backspace' && inp.selectionStart === 0 && inp.selectionEnd === 0 && idx > 0 && block.lines.length > 1) {
       e.preventDefault();
       const mergePos = block.lines[idx - 1].length;
@@ -382,7 +382,7 @@ function makeParaLine(block, idx, content, api) {
       _reindexPara(block, content, api);
       const prevInp = content.querySelectorAll('.be-para-line')[idx - 1];
       if (prevInp) { prevInp.focus(); prevInp.setSelectionRange(mergePos, mergePos); }
-      api.onChange(); api.pushUndoImmediate();
+      api.pushUndoImmediate();
     }
   });
   setTimeout(function () { autoGrow(inp); }, 0);
