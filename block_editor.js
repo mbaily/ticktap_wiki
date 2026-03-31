@@ -772,7 +772,7 @@ function init() {
         if (idx < 0) return;
         const nb = makeDefaultBlock(type, level); nb._id = block._id; nb._selected = true;
         if ((block.type === 'para' || block.type === 'heading') && nb.type === 'para') nb.lines = (block.lines || [block.text || '']).slice();
-        else if (block.type === 'para' && nb.type === 'heading') nb.text = (block.lines && block.lines[0]) || '';
+        else if ((block.type === 'para' || block.type === 'heading') && nb.type === 'heading') nb.text = block.type === 'heading' ? block.text : (block.lines && block.lines[0]) || '';
         else if (['todo','bullet','ordered'].indexOf(block.type) >= 0 && ['todo','bullet','ordered'].indexOf(nb.type) >= 0) { nb.text = block.text; nb.indent = block.indent; }
         blocks[idx] = nb;
       });
