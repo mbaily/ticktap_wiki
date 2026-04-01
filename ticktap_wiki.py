@@ -46,6 +46,8 @@ INLINE_DELETE     = False             # show ❌ delete buttons on todo and list
 SECTION_EDIT_MIN  = 1              # minimum heading level to show [edit] section buttons (1 is h1 is ======)
 SECTION_EDIT_MAX  = 4              # maximum heading level to show [edit] section buttons (5 is h5 is ==)
 
+TOC_MAX_LEVEL     = 4              # deepest heading level included in the TOC (1=h1 only … 5=h1–h5); typical values: 3 or 4
+
 MARKUP_BAR_DESKTOP = True          # show the editor markup toolbar on desktop
 MARKUP_BAR_MOBILE  = True          # show the editor markup toolbar on mobile (≤700 px)
 
@@ -123,11 +125,13 @@ def _get_user_setting(username: str, key: str, default: str = "") -> str:
         return default
     try:
         con = _get_db()
-        row = con.execute(
-            "SELECT value FROM user_settings WHERE username=? AND key=?",
-            (username, key),
-        ).fetchone()
-        con.close()
+        try:
+            row = con.execute(
+                "SELECT value FROM user_settings WHERE username=? AND key=?",
+                (username, key),
+            ).fetchone()
+        finally:
+            con.close()
         return row[0] if row else default
     except Exception:
         return default
@@ -139,13 +143,15 @@ def _set_user_settings(username: str, pairs: dict[str, str]) -> None:
         return
     try:
         con = _get_db()
-        con.executemany(
-            "INSERT INTO user_settings (username, key, value) VALUES (?,?,?) "
-            "ON CONFLICT(username, key) DO UPDATE SET value=excluded.value",
-            [(username, k, v) for k, v in pairs.items()],
-        )
-        con.commit()
-        con.close()
+        try:
+            con.executemany(
+                "INSERT INTO user_settings (username, key, value) VALUES (?,?,?) "
+                "ON CONFLICT(username, key) DO UPDATE SET value=excluded.value",
+                [(username, k, v) for k, v in pairs.items()],
+            )
+            con.commit()
+        finally:
+            con.close()
     except Exception:
         pass
 
@@ -1215,11 +1221,12 @@ def breadcrumb(name: str) -> str:
     return f'<div class="breadcrumb">{" &rsaquo; ".join(crumbs)}</div>'
 
 def toc_html(headings: list) -> str:
-    if not headings:
+    visible = [(lvl, txt, anc) for lvl, txt, anc in headings if lvl <= TOC_MAX_LEVEL]
+    if not visible:
         return ""
     items = "".join(
         f'<li class="h{lvl}"><a href="#{anc}">{html.escape(txt)}</a></li>'
-        for lvl, txt, anc in headings
+        for lvl, txt, anc in visible
     )
     return (f'<div class="toc"><h3 style="cursor:pointer" onclick="var u=this.closest(\'.toc\').querySelector(\'ul\');u.style.display=u.style.display===\'none\'?\'block\':\'none\'">Contents '
             f'<button onclick="event.stopPropagation();var u=this.closest(\'.toc\').querySelector(\'ul\');u.style.display=u.style.display===\'none\'?\'block\':\'none\'">&#177;</button>'
@@ -1628,7 +1635,7 @@ def settings_get(request: Request, saved: str = "", _auth: None = Depends(requir
 
 
 @app.post("/settings", response_class=HTMLResponse)
-async def settings_post(request: Request, home_page: str = Form(""), journal_format: str = Form(""), _auth: None = Depends(require_auth)):
+def settings_post(request: Request, home_page: str = Form(""), journal_format: str = Form(""), _auth: None = Depends(require_auth)):
     username = getattr(request.state, "username", "") or ""
     if not username:
         return RedirectResponse("/wiki/Home", status_code=303)
@@ -2511,6 +2518,13 @@ async def delete_post(request: Request, name: str, confirm: str = Form(""), _aut
         p = page_path(name)
         if p.exists():
             p.unlink()
+        # Remove empty parent namespace directory
+        try:
+            parent = p.parent
+            if parent != PAGES_DIR and parent.is_dir() and not any(parent.iterdir()):
+                parent.rmdir()
+        except OSError:
+            pass
         # Clean up attic snapshots so deleted pages don't leave orphaned history
         try:
             attic_dir = _attic_page_dir(name)
@@ -3019,7 +3033,7 @@ def today(request: Request, _auth: None = Depends(require_auth)):
 
 
 @app.post("/pin/{name:path}")
-async def pin_toggle(name: str, request: Request, _auth: None = Depends(require_auth)):
+def pin_toggle(name: str, request: Request, _auth: None = Depends(require_auth)):
     name = normalize_name(name)
     _check_page_reader(request, name)
     try:
