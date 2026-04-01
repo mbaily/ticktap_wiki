@@ -1177,6 +1177,7 @@ def _set_pins_cookie(response, pins: list[str]):
                         httponly=True, samesite="strict", secure=HTTPS_ENABLED, path="/")
 
 
+def pins_bar(request: Request | None) -> str:
     pins = _get_pins(request)
     if USER_PAGE_HIDDEN and USER_PAGE_NS:
         requester = (getattr(request.state, "username", "") or "") if request is not None else ""
