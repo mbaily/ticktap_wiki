@@ -1220,8 +1220,18 @@ def breadcrumb(name: str) -> str:
     crumbs.append(html.escape(parts[-1]))
     return f'<div class="breadcrumb">{" &rsaquo; ".join(crumbs)}</div>'
 
-def toc_html(headings: list) -> str:
-    visible = [(lvl, txt, anc) for lvl, txt, anc in headings if lvl <= TOC_MAX_LEVEL]
+
+def _toc_max(meta: dict) -> int | None:
+    """Return per-page TOC max level from meta, or None to use the site default."""
+    raw = meta.get("toc_max_level", "").strip()
+    if raw.isdigit():
+        return max(1, min(5, int(raw)))
+    return None
+
+
+def toc_html(headings: list, max_level: int | None = None) -> str:
+    cap = max_level if max_level is not None else TOC_MAX_LEVEL
+    visible = [(lvl, txt, anc) for lvl, txt, anc in headings if lvl <= cap]
     if not visible:
         return ""
     items = "".join(
@@ -1848,7 +1858,7 @@ def view(request: Request, name: str, _auth: None = Depends(require_auth)):
         f'border-radius:50%;background:#27ae60;color:#fff;border:none;font-size:1.5rem;'
         f'cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,.3);line-height:1">+</button>'
     )
-    body = f'{toolbar}{todo_bar}{fab}<div class="layout read-layout"><div class="content">{rendered}</div>{toc_html(headings)}</div>'
+    body = f'{toolbar}{todo_bar}{fab}<div class="layout read-layout"><div class="content">{rendered}</div>{toc_html(headings, _toc_max(meta))}</div>'
     return HTMLResponse(shell(name.split("/")[-1], body, request=request))
 
 
@@ -2400,6 +2410,14 @@ async def rename_post(request: Request, name: str, new_name: str = Form(""), _au
     new_colon = (":" + new_name) if not new_ns else new_name.replace("/", ":")
 
     def _rewrite_content(content: str, page_ns: str) -> str:
+        # Stash fenced code blocks and inline code so links inside them are not rewritten
+        stash: list[str] = []
+        def _hide(m: re.Match) -> str:
+            stash.append(m.group(0))
+            return f"\x00{len(stash)-1}\x00"
+        safe = re.sub(r"```[\s\S]*?```", _hide, content)
+        safe = re.sub(r"`[^`\n]+`", _hide, safe)
+
         def repl(m: re.Match) -> str:
             inner = m.group(1)
             parts = inner.split("|", 1)
@@ -2428,7 +2446,10 @@ async def rename_post(request: Request, name: str, new_name: str = Form(""), _au
                 new_target = new_colon
             lbl = f"|{label}" if label is not None else ""
             return f"[[{new_target}{lbl}]]"
-        return re.sub(r"\[\[(.+?)\]\]", repl, content)
+
+        result = re.sub(r"\[\[(.+?)\]\]", repl, safe)
+        # Restore stashed code blocks
+        return re.sub(r"\x00(\d+)\x00", lambda m: stash[int(m.group(1))], result)
 
     for wiki_file in sorted(PAGES_DIR.rglob("*.wiki")):
         try:
@@ -2935,7 +2956,7 @@ def history(request: Request, name: str, snap: str = "", view: str = "", _auth: 
             toggle_link = f'<a href="/history/{name_esc}?snap={snap_esc}&amp;view=source">View Source</a>'
             rendered, headings = parse(src, name, section_edit=False)
             content_html = rendered
-            toc = toc_html(headings)
+            toc = toc_html(headings, _toc_max(parse_meta(src)))
         body = (f'<div class="layout"><div class="content">{breadcrumb(name)}'
                 f'<div class="toolbar" style="margin-bottom:.5rem">'
                 f'<a href="/history/{name_esc}">&larr; History</a>'
