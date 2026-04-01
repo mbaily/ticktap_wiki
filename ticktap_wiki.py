@@ -124,6 +124,28 @@ def _set_user_setting(username: str, key: str, value: str) -> None:
         pass
 
 
+def _apply_journal_format(fmt: str, now: datetime) -> str:
+    """Substitute date tokens in a journal page format string and return the page name."""
+    return (
+        fmt
+        .replace("{yyyy}", now.strftime("%Y"))
+        .replace("{yy}",   now.strftime("%y"))
+        .replace("{mmmm}", now.strftime("%B"))
+        .replace("{mmm}",  now.strftime("%b"))
+        .replace("{mm}",   now.strftime("%m"))
+        .replace("{m}",    str(now.month))
+        .replace("{dd}",   now.strftime("%d"))
+        .replace("{d}",    str(now.day))
+        .replace("{www}",  now.strftime("%A"))
+        .replace("{ww}",   now.strftime("%a"))
+        .replace("{wn}",   now.strftime("%V"))
+        .replace("{q}",    str((now.month - 1) // 3 + 1))
+        .replace("{hh}",   now.strftime("%H"))
+        .replace("{HH}",   now.strftime("%I"))
+        .replace("{p}",    now.strftime("%p").lower())
+    )
+
+
 
 def normalize_name(name: str) -> str:
     """Replace spaces with underscores in each path segment (DokuWiki-style encoding)."""
@@ -1417,19 +1439,63 @@ def settings_get(request: Request, saved: str = "", _auth: None = Depends(requir
     username = getattr(request.state, "username", "") or ""
     if not username:
         return RedirectResponse("/wiki/Home", status_code=303)
-    # Build default home page suggestion
+    # Build defaults
     if USER_PAGE_NS and re.fullmatch(r"[A-Za-z0-9_\-]+", username):
         default_home = f"{USER_PAGE_NS.replace('/', ':')}:{username}:{USER_HOME_PAGE}"
     else:
         default_home = "Home"
     current_home = _get_user_setting(username, "home_page") or default_home
+    current_journal = _get_user_setting(username, "journal_format") or JOURNAL_PAGE_FORMAT
+    # Compute a live preview of the journal format using the current time
+    try:
+        tz = ZoneInfo(DISPLAY_TIMEZONE)
+    except Exception:
+        tz = timezone.utc
+    now = datetime.now(tz)
+    try:
+        journal_preview = _apply_journal_format(current_journal, now)
+    except Exception:
+        journal_preview = "(invalid)"
     saved_banner = ('<div class="notice" style="background:#d4edda;border-color:#28a745;color:#155724;margin-bottom:.8rem">'
                    '&#10003; Settings saved.</div>') if saved == "1" else ""
+    _tok = '<table style="border-collapse:collapse;font-size:.8rem;margin-top:.5rem">'
+    _tok += '<tr><th style="text-align:left;padding:.15rem .4rem;border:1px solid #ccc">Token</th><th style="text-align:left;padding:.15rem .4rem;border:1px solid #ccc">Meaning</th><th style="text-align:left;padding:.15rem .4rem;border:1px solid #ccc">Example</th></tr>'
+    for tok, meaning, example in [
+        ("{yyyy}", "4-digit year",          now.strftime("%Y")),
+        ("{yy}",   "2-digit year",          now.strftime("%y")),
+        ("{mmmm}", "Full month name",       now.strftime("%B")),
+        ("{mmm}",  "Short month name",      now.strftime("%b")),
+        ("{mm}",   "Month, zero-padded",    now.strftime("%m")),
+        ("{m}",    "Month, no padding",     str(now.month)),
+        ("{dd}",   "Day, zero-padded",      now.strftime("%d")),
+        ("{d}",    "Day, no padding",       str(now.day)),
+        ("{www}",  "Full weekday name",     now.strftime("%A")),
+        ("{ww}",   "Short weekday name",    now.strftime("%a")),
+        ("{wn}",   "ISO week number",       now.strftime("%V")),
+        ("{q}",    "Quarter (1\u20134)",     str((now.month - 1) // 3 + 1)),
+        ("{hh}",   "Hour, 24h zero-padded", now.strftime("%H")),
+        ("{HH}",   "Hour, 12h zero-padded", now.strftime("%I")),
+        ("{p}",    "am / pm",               now.strftime("%p").lower()),
+    ]:
+        _tok += (f'<tr><td style="padding:.15rem .4rem;border:1px solid #ccc;font-family:monospace">{tok}</td>'
+                 f'<td style="padding:.15rem .4rem;border:1px solid #ccc">{meaning}</td>'
+                 f'<td style="padding:.15rem .4rem;border:1px solid #ccc">{example}</td></tr>')
+    _tok += '</table>'
+    _jf_tokens = json.dumps({
+        "yyyy": now.strftime("%Y"), "yy": now.strftime("%y"),
+        "mmmm": now.strftime("%B"), "mmm": now.strftime("%b"),
+        "mm": now.strftime("%m"), "m": str(now.month),
+        "dd": now.strftime("%d"), "d": str(now.day),
+        "www": now.strftime("%A"), "ww": now.strftime("%a"),
+        "wn": now.strftime("%V"), "q": str((now.month - 1) // 3 + 1),
+        "hh": now.strftime("%H"), "HH": now.strftime("%I"),
+        "p": now.strftime("%p").lower(),
+    })
     body = (
         f'<div class="layout"><div class="content">'
         f'<h1>&#9881; Settings</h1>'
         f'{saved_banner}'
-        f'<form method="post" action="/settings" style="max-width:500px">'
+        f'<form method="post" action="/settings" style="max-width:560px">'
         f'<fieldset style="border:1px solid #ccc;border-radius:4px;padding:1rem;margin-bottom:1rem">'
         f'<legend style="padding:0 .4rem;font-weight:bold">Navigation</legend>'
         f'<label style="display:block;margin-bottom:.4rem;font-size:.9rem">'
@@ -1443,39 +1509,90 @@ def settings_get(request: Request, saved: str = "", _auth: None = Depends(requir
         f'Leave blank to use the site default (<code>Home</code>).</small>'
         f'</label>'
         f'</fieldset>'
+        f'<fieldset style="border:1px solid #ccc;border-radius:4px;padding:1rem;margin-bottom:1rem">'
+        f'<legend style="padding:0 .4rem;font-weight:bold">Today link</legend>'
+        f'<label style="display:block;margin-bottom:.6rem;font-size:.9rem">'
+        f'Page format template:'
+        f'<input type="text" name="journal_format" id="jf" value="{html.escape(current_journal)}" '
+        f'style="display:block;width:100%;margin-top:.3rem;padding:.35rem .5rem;font-size:1rem;'
+        f'font-family:monospace;box-sizing:border-box" '
+        f'placeholder="e.g. {html.escape(JOURNAL_PAGE_FORMAT)}">'
+        f'<small style="color:#888">Use <code>:</code> for namespaces. '
+        f'Leave blank to use the site default.'
+        f'<br>Current page: <code id="jfprev">{html.escape(journal_preview)}</code></small>'
+        f'</label>'
+        f'{_tok}'
+        f'</fieldset>'
         f'<button type="submit" style="padding:.4rem .9rem;background:#2980b9;color:#fff;'
         f'border:1px solid #1a5276;border-radius:3px;cursor:pointer">Save</button>'
         f'&nbsp;<a href="/">Cancel</a>'
-        f'</form></div></div>'
+        f'</form>'
+        f'<script>'
+        f'(function(){{'
+        f'  var inp=document.getElementById("jf");'
+        f'  var prev=document.getElementById("jfprev");'
+        f'  if(!inp||!prev)return;'
+        f'  var tokens={_jf_tokens};'
+        f'  function update(){{'
+        f'    var v=inp.value;'
+        f'    Object.entries(tokens).forEach(function(e){{v=v.split("{{"+ e[0] +"}}").join(e[1]);}});'
+        f'    prev.textContent=v;'
+        f'  }}'
+        f'  inp.addEventListener("input",update);'
+        f'}})();'
+        f'</script>'
+        f'</div></div>'
     )
     return HTMLResponse(shell("Settings", body, request=request))
 
 
 @app.post("/settings", response_class=HTMLResponse)
-async def settings_post(request: Request, home_page: str = Form(""), _auth: None = Depends(require_auth)):
+async def settings_post(request: Request, home_page: str = Form(""), journal_format: str = Form(""), _auth: None = Depends(require_auth)):
     username = getattr(request.state, "username", "") or ""
     if not username:
         return RedirectResponse("/wiki/Home", status_code=303)
+
+    def _err(msg: str) -> HTMLResponse:
+        body = (
+            f'<div class="layout"><div class="content">'
+            f'<h1>&#9881; Settings</h1>'
+            f'<div class="notice" style="background:#f8d7da;border-color:#f5c6cb;color:#721c24">'
+            f'{msg}</div>'
+            f'<p><a href="/settings">&larr; Back</a></p>'
+            f'</div></div>'
+        )
+        return HTMLResponse(shell("Settings", body, request=request), status_code=400)
+
     home_page = home_page.strip()
     if home_page:
-        # Validate: convert colon form to slash, then check each segment
         target = normalize_name(home_page.replace(":", "/"))
         try:
             page_path(target)
         except ValueError:
-            body = (
-                f'<div class="layout"><div class="content">'
-                f'<h1>&#9881; Settings</h1>'
-                f'<div class="notice" style="background:#f8d7da;border-color:#f5c6cb;color:#721c24">'
-                f'Invalid page name — use only letters, digits, hyphens, underscores and '
-                f'<code>:</code> for namespaces.</div>'
-                f'<p><a href="/settings">&larr; Back</a></p>'
-                f'</div></div>'
-            )
-            return HTMLResponse(shell("Settings", body, request=request), status_code=400)
+            return _err("Invalid home page name — use only letters, digits, hyphens, underscores and "
+                        "<code>:</code> for namespaces.")
         _set_user_setting(username, "home_page", home_page)
     else:
         _set_user_setting(username, "home_page", "")
+
+    journal_format = journal_format.strip()
+    if journal_format:
+        # Validate by rendering with a fixed date and checking each resulting path segment
+        try:
+            tz = ZoneInfo(DISPLAY_TIMEZONE)
+        except Exception:
+            tz = timezone.utc
+        rendered = _apply_journal_format(journal_format, datetime.now(tz))
+        test_target = normalize_name(rendered.replace(":", "/"))
+        try:
+            page_path(test_target)
+        except ValueError:
+            return _err("Invalid journal format — the resulting page name contains invalid characters. "
+                        "Only letters, digits, hyphens, underscores and <code>:</code> (namespace separators) are allowed.")
+        _set_user_setting(username, "journal_format", journal_format)
+    else:
+        _set_user_setting(username, "journal_format", "")
+
     return RedirectResponse("/settings?saved=1", status_code=303)
 
 
@@ -2803,27 +2920,15 @@ async def restore_snapshot(request: Request, name: str, snap: str = Form(""), _a
 # ── today / pin / tags / reorder routes ───────────────────────────────────────
 
 @app.get("/today")
-def today(_auth: None = Depends(require_auth)):
+def today(request: Request, _auth: None = Depends(require_auth)):
     try:
         tz = ZoneInfo(DISPLAY_TIMEZONE)
     except Exception:
         tz = timezone.utc
     now = datetime.now(tz)
-    page_name = (
-        JOURNAL_PAGE_FORMAT
-        .replace("{yyyy}", now.strftime("%Y"))
-        .replace("{yy}",   now.strftime("%y"))
-        .replace("{mmmm}", now.strftime("%B"))
-        .replace("{mmm}",  now.strftime("%b"))
-        .replace("{mm}",   now.strftime("%m"))
-        .replace("{m}",    str(now.month))
-        .replace("{dd}",   now.strftime("%d"))
-        .replace("{d}",    str(now.day))
-        .replace("{www}",  now.strftime("%A"))
-        .replace("{ww}",   now.strftime("%a"))
-        .replace("{wn}",   now.strftime("%V"))
-        .replace("{q}",    str((now.month - 1) // 3 + 1))
-    )
+    username = getattr(request.state, "username", "") or ""
+    fmt = _get_user_setting(username, "journal_format") or JOURNAL_PAGE_FORMAT
+    page_name = _apply_journal_format(fmt, now)
     # Convert colon namespace separators to slashes for the URL
     page_name = page_name.replace(":", "/")
     page_name = normalize_name(page_name)
