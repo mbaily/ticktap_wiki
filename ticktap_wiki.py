@@ -92,6 +92,7 @@ USER_PAGE_NS         = "user"  # namespace for per-user homepages; set "" to dis
 USER_PAGE_AUTOCREATE = True    # write a stub on first login if the page doesn't exist
 USER_PAGE_PRIVATE    = False   # True → only the owner may edit their own user page
 USER_PAGE_HIDDEN     = False   # True → only the owner may read/view their own user pages and files
+USER_HOME_PAGE       = "Home"  # page name for the user's landing page within their sub-namespace
 
 app = FastAPI()
 
@@ -1050,6 +1051,10 @@ def _set_pins_cookie(response, pins: list[str]):
 
 def pins_bar(request: Request | None) -> str:
     pins = _get_pins(request)
+    if USER_PAGE_HIDDEN and USER_PAGE_NS:
+        requester = (getattr(request.state, "username", "") or "") if request is not None else ""
+        pins = [p for p in pins
+                if not (_is_user_ns(p)[0] and _is_user_ns(p)[1] != requester)]
     if not pins:
         return '<div id="pin-bar" class="pin-bar" style="display:none"></div>'
     links = "".join(
@@ -1349,7 +1354,7 @@ def my_page(request: Request, _auth: None = Depends(require_auth)):
     username = request.state.username
     if not username:
         return RedirectResponse("/wiki/Home", status_code=303)
-    return RedirectResponse(f"/wiki/{USER_PAGE_NS}/{quote(username, safe='')}", status_code=303)
+    return RedirectResponse(f"/wiki/{USER_PAGE_NS}/{quote(username, safe='')}/{USER_HOME_PAGE}", status_code=303)
 
 
 @app.get("/wiki/{name:path}", response_class=HTMLResponse)
@@ -1521,6 +1526,7 @@ def view(request: Request, name: str, _auth: None = Depends(require_auth)):
 @app.get("/sect/{name:path}/{idx}", response_class=HTMLResponse)
 def edit_section_get(request: Request, name: str, idx: int, _auth: None = Depends(require_auth)):
     name = normalize_name(name)
+    _check_page_reader(request, name)
     _check_page_owner(request, name)
     if idx < 0:
         return HTMLResponse("Section not found", 400)
@@ -1553,6 +1559,7 @@ def edit_section_get(request: Request, name: str, idx: int, _auth: None = Depend
 @app.post("/sect/{name:path}/{idx}", response_class=HTMLResponse)
 async def edit_section_post(request: Request, name: str, idx: int, content: str = Form(""), anchor: str = Form(""), _auth: None = Depends(require_auth)):
     name = normalize_name(name)
+    _check_page_reader(request, name)
     _check_page_owner(request, name)
     if idx < 0:
         return HTMLResponse("Section not found", 400)
@@ -1614,14 +1621,16 @@ def _check_page_reader(request: Request, name: str):
     if not in_user_ns:
         return
     requester = getattr(request.state, "username", "") or ""
+    if not requester:
+        return  # auth disabled — ownership indeterminate, allow
     if requester != owner:
         from fastapi import HTTPException
         raise HTTPException(status_code=403, detail="This page is private.")
 
 
 def _check_file_ns_owner(request: Request, ns: str):
-    """If USER_PAGE_PRIVATE is enabled, only the owner may upload/delete files in their user namespace."""
-    if not USER_PAGE_PRIVATE or not USER_PAGE_NS:
+    """If USER_PAGE_PRIVATE or USER_PAGE_HIDDEN is enabled, only the owner may upload/delete files in their user namespace."""
+    if not (USER_PAGE_PRIVATE or USER_PAGE_HIDDEN) or not USER_PAGE_NS:
         return
     in_user_ns, owner = _is_user_ns(ns)
     if not in_user_ns:
@@ -1637,6 +1646,7 @@ def _check_file_ns_owner(request: Request, ns: str):
 @app.get("/edit/{name:path}", response_class=HTMLResponse)
 def edit_get(request: Request, name: str, _auth: None = Depends(require_auth)):
     name = normalize_name(name)
+    _check_page_reader(request, name)
     _check_page_owner(request, name)
     try:
         src = read_page(name)
@@ -1680,6 +1690,7 @@ def edit_get(request: Request, name: str, _auth: None = Depends(require_auth)):
 @app.post("/edit/{name:path}", response_class=HTMLResponse)
 async def edit_post(request: Request, name: str, content: str = Form(""), _auth: None = Depends(require_auth)):
     name = normalize_name(name)
+    _check_page_reader(request, name)
     _check_page_owner(request, name)
     try:
         write_page(name, content)
@@ -1699,6 +1710,7 @@ async def preview(name: str = Form(""), content: str = Form(""), _auth: None = D
 @app.post("/toggle/{name:path}/{line}", response_class=HTMLResponse)
 async def toggle(request: Request, name: str, line: int, _auth: None = Depends(require_auth)):
     name = normalize_name(name)
+    _check_page_reader(request, name)
     _check_page_owner(request, name)
     if line < 0:
         return HTMLResponse("Out of range", 400)
@@ -1736,6 +1748,7 @@ async def toggle(request: Request, name: str, line: int, _auth: None = Depends(r
 @app.post("/add-todo/{name:path}")
 async def add_todo(name: str, request: Request, _auth: None = Depends(require_auth)):
     name = normalize_name(name)
+    _check_page_reader(request, name)
     _check_page_owner(request, name)
     try:
         body = await request.json()
@@ -1777,6 +1790,7 @@ async def add_todo(name: str, request: Request, _auth: None = Depends(require_au
 @app.post("/delete-line/{name:path}/{line}")
 async def delete_line(request: Request, name: str, line: int, _auth: None = Depends(require_auth)):
     name = normalize_name(name)
+    _check_page_reader(request, name)
     _check_page_owner(request, name)
     if line < 0:
         return JSONResponse({"ok": False, "error": "Invalid line"}, status_code=400)
@@ -1835,6 +1849,7 @@ def raw_section(request: Request, name: str, idx: int, _auth: None = Depends(req
 @app.get("/block-edit/{name:path}", response_class=HTMLResponse)
 def block_edit(request: Request, name: str, _auth: None = Depends(require_auth)):
     name = normalize_name(name)
+    _check_page_reader(request, name)
     _check_page_owner(request, name)
     try:
         page_path(name)  # validate
@@ -1848,6 +1863,7 @@ def block_edit(request: Request, name: str, _auth: None = Depends(require_auth))
 @app.get("/block-sect/{name:path}/{idx}", response_class=HTMLResponse)
 def block_sect(request: Request, name: str, idx: int, _auth: None = Depends(require_auth)):
     name = normalize_name(name)
+    _check_page_reader(request, name)
     _check_page_owner(request, name)
     if idx < 0:
         return HTMLResponse("Section not found", 400)
@@ -1892,10 +1908,14 @@ def ns_view(request: Request, ns: str, _auth: None = Depends(require_auth)):
     ns_clean = ns.strip("/")
     requester = getattr(request.state, "username", "") or ""
     _hide = (lambda p: _is_user_ns(p)[0] and _is_user_ns(p)[1] != requester) if USER_PAGE_HIDDEN else None
+    # When USER_PAGE_HIDDEN is active, suppress the files section for a user sub-namespace
+    # that doesn't belong to the current user (e.g. /ns/user visits files/user/).
+    _in_ns, _ns_owner = _is_user_ns(ns_clean) if ns_clean else (False, "")
+    _hide_files = USER_PAGE_HIDDEN and _in_ns and _ns_owner != requester
     body = (f'<div class="layout"><div class="content">'
             f'<h1>Namespace: {html.escape(ns)}</h1>'
             f'{dir_listing(ns_dir, ns_clean, _hide)}'
-            f'{files_section(ns_clean)}'
+            f'{"" if _hide_files else files_section(ns_clean)}'
             f'</div></div>')
     return HTMLResponse(shell(f"ns:{ns}", body, request=request))
 
@@ -1990,6 +2010,8 @@ def search(request: Request, q: str = "", _auth: None = Depends(require_auth)):
 @app.get("/rename/{name:path}", response_class=HTMLResponse)
 def rename_get(request: Request, name: str, _auth: None = Depends(require_auth)):
     name = normalize_name(name)
+    _check_page_reader(request, name)
+    _check_page_owner(request, name)
     try:
         p = page_path(name)
     except ValueError:
@@ -2131,6 +2153,7 @@ def delete_get(request: Request, name: str, _auth: None = Depends(require_auth))
         page_path(name)  # validate name; raises ValueError on bad input
     except ValueError:
         return HTMLResponse("Invalid page name", 400)
+    _check_page_reader(request, name)
     _check_page_owner(request, name)
     body = (f'<div class="layout"><div class="content">'
             f'<h1>Delete page</h1>'
@@ -2146,6 +2169,7 @@ def delete_get(request: Request, name: str, _auth: None = Depends(require_auth))
 @app.post("/delete/{name:path}", response_class=HTMLResponse)
 async def delete_post(request: Request, name: str, confirm: str = Form(""), _auth: None = Depends(require_auth)):
     name = normalize_name(name)
+    _check_page_reader(request, name)
     _check_page_owner(request, name)
     if confirm != "yes":
         return RedirectResponse(f"/wiki/{name}", status_code=303)
@@ -2204,7 +2228,7 @@ async def login_post(request: Request, username: str = Form(""), password: str =
     token = _issue_token(username)
     if USER_PAGE_NS and USER_PAGE_AUTOCREATE:
         try:
-            _user_page = f"{USER_PAGE_NS}/{username}"
+            _user_page = f"{USER_PAGE_NS}/{username}/{USER_HOME_PAGE}"
             if read_page(_user_page) is None:
                 write_page(_user_page,
                            f"====== {username} ======\n\nWelcome to my page.\n")
@@ -2469,6 +2493,10 @@ def orphans(request: Request, _auth: None = Depends(require_auth)):
             referenced.add(raw.replace(":", "/"))
 
     orphaned = sorted(all_files - referenced)
+    requester = getattr(request.state, "username", "") or ""
+    if USER_PAGE_HIDDEN:
+        orphaned = [r for r in orphaned
+                    if not (_is_user_ns(r)[0] and _is_user_ns(r)[1] != requester)]
 
     if not orphaned:
         body = ('<div class="layout"><div class="content">'
@@ -2667,6 +2695,7 @@ def today(_auth: None = Depends(require_auth)):
 @app.post("/pin/{name:path}")
 async def pin_toggle(name: str, request: Request, _auth: None = Depends(require_auth)):
     name = normalize_name(name)
+    _check_page_reader(request, name)
     try:
         page_path(name)
     except ValueError:
@@ -2684,6 +2713,7 @@ async def pin_toggle(name: str, request: Request, _auth: None = Depends(require_
 
 @app.get("/tags", response_class=HTMLResponse)
 def tags_index(request: Request, _auth: None = Depends(require_auth)):
+    requester = getattr(request.state, "username", "") or ""
     tag_map: dict[str, list[str]] = {}
     for f in sorted(PAGES_DIR.rglob("*.wiki")):
         try:
@@ -2692,6 +2722,10 @@ def tags_index(request: Request, _auth: None = Depends(require_auth)):
             continue
         meta = parse_meta(src)
         pname = str(f.relative_to(PAGES_DIR).with_suffix("")).replace("\\", "/")
+        if USER_PAGE_HIDDEN:
+            _in_ns, _owner = _is_user_ns(pname)
+            if _in_ns and _owner != requester:
+                continue
         for t in (x.strip() for x in meta.get("tags", "").split(",") if x.strip()):
             tag_map.setdefault(t, []).append(pname)
     if not tag_map:
@@ -2719,6 +2753,7 @@ def tag_pages(request: Request, tag: str, _auth: None = Depends(require_auth)):
     tag = tag.strip()
     if not tag or len(tag) > 80:
         return HTMLResponse("Invalid tag", 400)
+    requester = getattr(request.state, "username", "") or ""
     results = []
     for f in sorted(PAGES_DIR.rglob("*.wiki")):
         try:
@@ -2729,6 +2764,10 @@ def tag_pages(request: Request, tag: str, _auth: None = Depends(require_auth)):
         if tag not in page_tags:
             continue
         pname = str(f.relative_to(PAGES_DIR).with_suffix("")).replace("\\", "/")
+        if USER_PAGE_HIDDEN:
+            _in_ns, _owner = _is_user_ns(pname)
+            if _in_ns and _owner != requester:
+                continue
         try:
             mtime = time.strftime("%Y-%m-%d", time.localtime(f.stat().st_mtime))
         except OSError:
@@ -2751,6 +2790,7 @@ def tag_pages(request: Request, tag: str, _auth: None = Depends(require_auth)):
 @app.post("/reorder-todos/{name:path}")
 async def reorder_todos(name: str, request: Request, _auth: None = Depends(require_auth)):
     name = normalize_name(name)
+    _check_page_reader(request, name)
     _check_page_owner(request, name)
     try:
         body = await request.json()
