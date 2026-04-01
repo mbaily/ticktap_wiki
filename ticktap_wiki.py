@@ -96,8 +96,8 @@ JOURNAL_PAGE_FORMAT = "Todo {yyyy} {mmmm}"
 
 USER_PAGE_NS         = "user"  # namespace for per-user homepages; set "" to disable
 USER_PAGE_AUTOCREATE = True    # write a stub on first login if the page doesn't exist
-USER_PAGE_PRIVATE    = False   # True → only the owner may edit their own user page
-USER_PAGE_HIDDEN     = False   # True → only the owner may read/view their own user pages and files
+USER_PAGE_PRIVATE    = True   # True → only the owner may edit their own user page
+USER_PAGE_HIDDEN     = True   # True → only the owner may read/view their own user pages and files
 USER_HOME_PAGE       = "Home"  # page name for the user's landing page within their sub-namespace
 USER_SETTINGS_FILE   = Path(__file__).parent / ".wiki_user_settings"  # dbm file for per-user preferences
 
