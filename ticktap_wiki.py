@@ -91,6 +91,7 @@ JOURNAL_PAGE_FORMAT = "Todo {yyyy} {mmmm}"
 USER_PAGE_NS         = "user"  # namespace for per-user homepages; set "" to disable
 USER_PAGE_AUTOCREATE = True    # write a stub on first login if the page doesn't exist
 USER_PAGE_PRIVATE    = False   # True → only the owner may edit their own user page
+USER_PAGE_HIDDEN     = False   # True → only the owner may read/view their own user pages and files
 
 app = FastAPI()
 
@@ -1091,14 +1092,18 @@ def toc_html(headings: list) -> str:
             f'<button onclick="event.stopPropagation();var u=this.closest(\'.toc\').querySelector(\'ul\');u.style.display=u.style.display===\'none\'?\'block\':\'none\'">&#177;</button>'
             f'</h3><ul>{items}</ul></div>')
 
-def dir_listing(d: Path, prefix: str) -> str:
+def dir_listing(d: Path, prefix: str, hide_fn=None) -> str:
     items = "<ul>"
     for child in sorted(d.iterdir()):
         if child.is_dir() and re.fullmatch(r"[A-Za-z0-9_\-]+", child.name):
             rel = f"{prefix}/{child.name}" if prefix else child.name
+            if hide_fn and hide_fn(rel):
+                continue
             items += f'<li>&#128193; <a href="/ns/{rel}">{html.escape(child.name)}/</a></li>'
         elif child.suffix == ".wiki" and not child.name.startswith("_"):
             pname = f"{prefix}/{child.stem}" if prefix else child.stem
+            if hide_fn and hide_fn(pname):
+                continue
             try:
                 mtime = time.strftime("%Y-%m-%d", time.localtime(child.stat().st_mtime))
             except OSError:
@@ -1350,6 +1355,7 @@ def my_page(request: Request, _auth: None = Depends(require_auth)):
 @app.get("/wiki/{name:path}", response_class=HTMLResponse)
 def view(request: Request, name: str, _auth: None = Depends(require_auth)):
     name = normalize_name(name)
+    _check_page_reader(request, name)
     try:
         src = read_page(name)
     except ValueError:
@@ -1572,6 +1578,18 @@ async def edit_section_post(request: Request, name: str, idx: int, content: str 
     return RedirectResponse(f"/wiki/{name}{frag}", status_code=303)
 
 
+def _is_user_ns(path: str) -> tuple[bool, str]:
+    """Return (True, owner_username) if path falls within USER_PAGE_NS, else (False, "")."""
+    if not USER_PAGE_NS:
+        return False, ""
+    ns_parts = USER_PAGE_NS.split("/")
+    ns_depth = len(ns_parts)
+    parts = path.strip("/").split("/")
+    if parts[:ns_depth] != ns_parts or len(parts) <= ns_depth:
+        return False, ""
+    return True, parts[ns_depth]
+
+
 def _check_page_owner(request: Request, name: str):
     """If USER_PAGE_PRIVATE is enabled, forbid editing another user's page."""
     if not USER_PAGE_PRIVATE or not USER_PAGE_NS:
@@ -1580,15 +1598,40 @@ def _check_page_owner(request: Request, name: str):
     if not requester:
         # Auth is disabled or no identity — ownership cannot be determined, allow.
         return
-    ns_parts = USER_PAGE_NS.split("/")
-    ns_depth = len(ns_parts)
-    parts = name.split("/")
-    if parts[:ns_depth] != ns_parts or len(parts) <= ns_depth:
+    in_user_ns, owner = _is_user_ns(name)
+    if not in_user_ns:
         return
-    owner = parts[ns_depth]
     if requester != owner:
         from fastapi import HTTPException
         raise HTTPException(status_code=403, detail="You may only edit your own user page.")
+
+
+def _check_page_reader(request: Request, name: str):
+    """If USER_PAGE_HIDDEN is enabled, only the owner may read their user pages."""
+    if not USER_PAGE_HIDDEN or not USER_PAGE_NS:
+        return
+    in_user_ns, owner = _is_user_ns(name)
+    if not in_user_ns:
+        return
+    requester = getattr(request.state, "username", "") or ""
+    if requester != owner:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=403, detail="This page is private.")
+
+
+def _check_file_ns_owner(request: Request, ns: str):
+    """If USER_PAGE_PRIVATE is enabled, only the owner may upload/delete files in their user namespace."""
+    if not USER_PAGE_PRIVATE or not USER_PAGE_NS:
+        return
+    in_user_ns, owner = _is_user_ns(ns)
+    if not in_user_ns:
+        return
+    requester = getattr(request.state, "username", "") or ""
+    if not requester:
+        return  # auth disabled
+    if requester != owner:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=403, detail="You may only manage files in your own user namespace.")
 
 
 @app.get("/edit/{name:path}", response_class=HTMLResponse)
@@ -1760,8 +1803,9 @@ async def delete_line(request: Request, name: str, line: int, _auth: None = Depe
 # ── block editor routes ────────────────────────────────────────────────────────
 
 @app.get("/raw/{name:path}")
-def raw_page(name: str, _auth: None = Depends(require_auth)):
+def raw_page(request: Request, name: str, _auth: None = Depends(require_auth)):
     name = normalize_name(name)
+    _check_page_reader(request, name)
     try:
         src = read_page(name)
     except ValueError:
@@ -1770,8 +1814,9 @@ def raw_page(name: str, _auth: None = Depends(require_auth)):
 
 
 @app.get("/raw-sect/{name:path}/{idx}")
-def raw_section(name: str, idx: int, _auth: None = Depends(require_auth)):
+def raw_section(request: Request, name: str, idx: int, _auth: None = Depends(require_auth)):
     name = normalize_name(name)
+    _check_page_reader(request, name)
     if idx < 0:
         return JSONResponse({"error": "Section not found"}, status_code=404)
     try:
@@ -1790,6 +1835,7 @@ def raw_section(name: str, idx: int, _auth: None = Depends(require_auth)):
 @app.get("/block-edit/{name:path}", response_class=HTMLResponse)
 def block_edit(request: Request, name: str, _auth: None = Depends(require_auth)):
     name = normalize_name(name)
+    _check_page_owner(request, name)
     try:
         page_path(name)  # validate
     except ValueError:
@@ -1802,6 +1848,7 @@ def block_edit(request: Request, name: str, _auth: None = Depends(require_auth))
 @app.get("/block-sect/{name:path}/{idx}", response_class=HTMLResponse)
 def block_sect(request: Request, name: str, idx: int, _auth: None = Depends(require_auth)):
     name = normalize_name(name)
+    _check_page_owner(request, name)
     if idx < 0:
         return HTMLResponse("Section not found", 400)
     try:
@@ -1834,13 +1881,20 @@ def ns_view(request: Request, ns: str, _auth: None = Depends(require_auth)):
     for p in ns.split("/"):
         if not re.fullmatch(r"[A-Za-z0-9_\-]+", p):
             return HTMLResponse("Invalid namespace", 400)
+    # Block access to another user's namespace when USER_PAGE_HIDDEN is enabled
+    if USER_PAGE_HIDDEN:
+        _in_ns, _owner = _is_user_ns(ns)
+        if _in_ns and (getattr(request.state, "username", "") or "") != _owner:
+            return HTMLResponse("Not found", 404)
     ns_dir = PAGES_DIR.joinpath(*ns.split("/"))
     if not ns_dir.is_dir():
         return HTMLResponse("Namespace not found", 404)
     ns_clean = ns.strip("/")
+    requester = getattr(request.state, "username", "") or ""
+    _hide = (lambda p: _is_user_ns(p)[0] and _is_user_ns(p)[1] != requester) if USER_PAGE_HIDDEN else None
     body = (f'<div class="layout"><div class="content">'
             f'<h1>Namespace: {html.escape(ns)}</h1>'
-            f'{dir_listing(ns_dir, ns_clean)}'
+            f'{dir_listing(ns_dir, ns_clean, _hide)}'
             f'{files_section(ns_clean)}'
             f'</div></div>')
     return HTMLResponse(shell(f"ns:{ns}", body, request=request))
@@ -1848,14 +1902,23 @@ def ns_view(request: Request, ns: str, _auth: None = Depends(require_auth)):
 
 @app.get("/sitemap", response_class=HTMLResponse)
 def sitemap(request: Request, _auth: None = Depends(require_auth)):
+    requester = getattr(request.state, "username", "") or ""
     def tree(d: Path, prefix: str) -> str:
         s = "<ul>"
         for child in sorted(d.iterdir()):
             if child.is_dir() and re.fullmatch(r"[A-Za-z0-9_\-]+", child.name):
                 rel = f"{prefix}/{child.name}" if prefix else child.name
+                if USER_PAGE_HIDDEN:
+                    _in_ns, _owner = _is_user_ns(rel)
+                    if _in_ns and _owner != requester:
+                        continue
                 s += f'<li>&#128193; <a href="/ns/{rel}"><strong>{html.escape(child.name)}/</strong></a>{tree(child, rel)}</li>'
             elif child.suffix == ".wiki" and not child.name.startswith("_"):
                 pname = f"{prefix}/{child.stem}" if prefix else child.stem
+                if USER_PAGE_HIDDEN:
+                    _in_ns, _owner = _is_user_ns(pname)
+                    if _in_ns and _owner != requester:
+                        continue
                 try:
                     mtime = time.strftime("%Y-%m-%d", time.localtime(child.stat().st_mtime))
                 except OSError:
@@ -1897,6 +1960,10 @@ def search(request: Request, q: str = "", _auth: None = Depends(require_auth)):
         if not hit_indices:
             continue
         pname = str(f.relative_to(PAGES_DIR).with_suffix("")).replace("\\", "/")
+        if USER_PAGE_HIDDEN:
+            _in_ns, _owner = _is_user_ns(pname)
+            if _in_ns and _owner != (getattr(request.state, "username", "") or ""):
+                continue
         shown: set[int] = set()
         snippets = []
         for hi in hit_indices:
@@ -1968,6 +2035,7 @@ async def rename_post(request: Request, name: str, new_name: str = Form(""), _au
         return RedirectResponse(f"/wiki/{name}", status_code=303)
     if new_path.exists():
         return HTMLResponse(f"A page named \u2018{html.escape(new_name)}\u2019 already exists", 400)
+    _check_page_owner(request, new_name)
 
     # Rewrite all [[...]] links across all pages that resolve to `name`
     # For root pages (new_ns==""), cross-namespace links must use [[:NewPage]].
@@ -2142,7 +2210,7 @@ async def login_post(request: Request, username: str = Form(""), password: str =
                            f"====== {username} ======\n\nWelcome to my page.\n")
         except (ValueError, OSError):
             pass  # username not valid as a page-name segment, or disk error — don't block login
-    safe_next = next if next.startswith("/") and not next.startswith("//") else "/wiki/Home"
+    safe_next = next if re.match(r'^/[^/\\]', next) else "/wiki/Home"
     resp = RedirectResponse(safe_next, status_code=303)
     secure_cookie = HTTPS_ENABLED or request.url.scheme == "https"
     _auth_log.info("login_post: user=%s scheme=%s secure=%s next=%s",
@@ -2261,11 +2329,15 @@ def _upload_page(ns: str, results: list | None, request: Request | None = None, 
     return HTMLResponse(shell(f"Upload \u2014 {html.escape(ns_display)}", body, request=request))
 
 async def _do_upload(ns: str, files: list[UploadFile], request: Request | None = None, insert_pos: int = -1) -> HTMLResponse:
+    if len(files) > 20:
+        return HTMLResponse("Too many files in one request (max 20)", 400)
     if ns:
         ns = normalize_name(ns)
         for seg in ns.split("/"):
             if not re.fullmatch(r"[A-Za-z0-9_\-]+", seg):
                 return HTMLResponse("Invalid namespace", 400)
+    if request is not None:
+        _check_file_ns_owner(request, ns)
     dest = (FILES_DIR.joinpath(*ns.split("/")) if ns else FILES_DIR)
     dest.mkdir(parents=True, exist_ok=True)
     results, total = [], 0
@@ -2318,7 +2390,7 @@ async def upload_post(request: Request, ns: str, pos: int = -1, files: list[Uplo
 
 
 @app.get("/files/{filepath:path}")
-def serve_file(filepath: str, _auth: None = Depends(require_auth)):
+def serve_file(request: Request, filepath: str, _auth: None = Depends(require_auth)):
     filepath = filepath.strip("/")
     if not filepath:
         return HTMLResponse("Not found", 404)
@@ -2326,6 +2398,10 @@ def serve_file(filepath: str, _auth: None = Depends(require_auth)):
         f_ns, filename = filepath.rsplit("/", 1)
     else:
         f_ns, filename = "", filepath
+    if USER_PAGE_HIDDEN:
+        _in_ns, _owner = _is_user_ns(f_ns)
+        if _in_ns and (getattr(request.state, "username", "") or "") != _owner:
+            return HTMLResponse("Not found", 404)
     try:
         p = file_path(f_ns, filename)
     except ValueError:
@@ -2348,6 +2424,7 @@ async def file_delete(request: Request, filepath: str, _auth: None = Depends(req
         f_ns, filename = filepath.rsplit("/", 1)
     else:
         f_ns, filename = "", filepath
+    _check_file_ns_owner(request, f_ns)
     try:
         p = file_path(f_ns, filename)
         if p.exists():
@@ -2446,6 +2523,7 @@ _SNAP_RE = re.compile(r"^\d{8}_\d{6}(_\d{6})?$")
 @app.get("/history/{name:path}", response_class=HTMLResponse)
 def history(request: Request, name: str, snap: str = "", view: str = "", _auth: None = Depends(require_auth)):
     name = normalize_name(name)
+    _check_page_reader(request, name)
     if not VERSIONING_ENABLED:
         return HTMLResponse(shell("History", '<div class="layout"><div class="content">'
                                   '<div class="notice">Versioning is disabled '
@@ -2532,8 +2610,9 @@ def history(request: Request, name: str, snap: str = "", view: str = "", _auth: 
 
 
 @app.post("/restore/{name:path}", response_class=HTMLResponse)
-async def restore_snapshot(name: str, snap: str = Form(""), _auth: None = Depends(require_auth)):
+async def restore_snapshot(request: Request, name: str, snap: str = Form(""), _auth: None = Depends(require_auth)):
     name = normalize_name(name)
+    _check_page_owner(request, name)
     if not VERSIONING_ENABLED:
         return HTMLResponse("Versioning is disabled", 400)
     if not _SNAP_RE.match(snap):
@@ -2581,6 +2660,7 @@ def today(_auth: None = Depends(require_auth)):
     )
     # Convert colon namespace separators to slashes for the URL
     page_name = page_name.replace(":", "/")
+    page_name = normalize_name(page_name)
     return RedirectResponse(f"/wiki/{page_name}", status_code=303)
 
 
@@ -2671,6 +2751,7 @@ def tag_pages(request: Request, tag: str, _auth: None = Depends(require_auth)):
 @app.post("/reorder-todos/{name:path}")
 async def reorder_todos(name: str, request: Request, _auth: None = Depends(require_auth)):
     name = normalize_name(name)
+    _check_page_owner(request, name)
     try:
         body = await request.json()
     except Exception:
