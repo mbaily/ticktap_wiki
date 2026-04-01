@@ -49,6 +49,11 @@ SECTION_EDIT_MAX  = 4              # maximum heading level to show [edit] sectio
 MARKUP_BAR_DESKTOP = True          # show the editor markup toolbar on desktop
 MARKUP_BAR_MOBILE  = True          # show the editor markup toolbar on mobile (≤700 px)
 
+# Nav-bar items that should show only their icon (no label text), saving space.
+# Recognised values: "new", "today", "tags", "orphans", "mypage"
+# Example: NAV_ICON_ONLY = {"new", "today", "tags", "orphans", "mypage"}
+NAV_ICON_ONLY: set[str] = set()
+
 EDIT_PAGE_PADDING  = "2px"        # left/right padding of the edit page layout (CSS length, e.g. "0rem", "1rem", "16px")
 READ_PAGE_PADDING  = "2px"       # left/right padding of the read page layout (CSS length, e.g. "0rem", "1rem", "16px")
 
@@ -1055,22 +1060,38 @@ def serve_block_editor_js(h: str):
 
 def nav_bar(search_q: str = "", username: str = "") -> str:
     q = html.escape(search_q)
-    my_page_link = (f'<a href="/me">&#128100; My page</a>'
-                    if (USER_PAGE_NS and username) else "")
-    settings_link = (f'<a href="/settings" title="Settings">&#9881;</a>'
-                     if username else "")
-    logout = (f' <a href="/logout" style="margin-left:auto;font-size:.85rem;color:#ecf0f1">'
-              f'&#128274; logout ({html.escape(username)})</a>') if username else ""
-    return (f'<nav><a href="/"><strong>&#128366; {html.escape(SITE_TITLE)}</strong></a>'
-            f'<a href="/sitemap">Site Map</a><a href="/new">+ New Page</a>'
-            f'<a href="/today">&#128197; Today</a>'
-            f'<a href="/tags">&#127991; Tags</a>'
-            f'<a href="/orphans">&#128204; Orphaned Files</a>'
-            f'{my_page_link}'
-            f'{settings_link}'
-            f'{logout}'
-            f'<form method="get" action="/search" {"" if username else "style=\"margin-left:auto\""}>'
-            f'<input type="search" name="q" placeholder="Search\u2026" value="{q}"></form></nav>')
+
+    def _lnk(key: str, href: str, icon: str, label: str) -> str:
+        """Return a nav <a> that is icon-only (with title tooltip) or icon+label."""
+        if key in NAV_ICON_ONLY:
+            return f'<a href="{href}" title="{label}">{icon}</a>'
+        return f'<a href="{href}">{icon} {label}</a>'
+
+    my_page_link = (
+        _lnk("mypage", "/me", "&#128100;", "My page")
+        if (USER_PAGE_NS and username) else ""
+    )
+    settings_link = (
+        f'<a href="/settings" title="Settings">&#9881;</a>'
+        if username else ""
+    )
+    logout = (
+        f' <a href="/logout" style="margin-left:auto;font-size:.85rem;color:#ecf0f1">'
+        f'&#128274; logout ({html.escape(username)})</a>'
+    ) if username else ""
+    return (
+        f'<nav><a href="/"><strong>&#128366; {html.escape(SITE_TITLE)}</strong></a>'
+        f'<a href="/sitemap">Site Map</a>'
+        + _lnk("new",     "/new",     "&#10133;",  "New Page")
+        + _lnk("today",   "/today",   "&#128197;",  "Today")
+        + _lnk("tags",    "/tags",    "&#127991;",  "Tags")
+        + _lnk("orphans", "/orphans", "&#128204;",  "Orphaned Files")
+        + my_page_link
+        + settings_link
+        + logout
+        + f'<form method="get" action="/search" {"" if username else "style=\"margin-left:auto\""}'
+        + f'><input type="search" name="q" placeholder="Search\u2026" value="{q}"></form></nav>'
+    )
 
 
 def _get_pins(request: Request | None) -> list[str]:
