@@ -1,4 +1,4 @@
-import os, re, html, time, secrets, json, math, shutil, hashlib, base64, logging, sqlite3, threading
+import os, re, html, time, secrets, json, math, shutil, hashlib, base64, logging, sqlite3, threading, asyncio
 from urllib.parse import quote
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
@@ -48,6 +48,9 @@ ITEM_SPACING      = "0.00rem"        # vertical gap between todo items and list 
 
 INLINE_DELETE     = False             # show ❌ delete buttons on todo and list items in reader view
 
+TRACE_ENABLED     = True             # show DokuWiki-style recently-visited pages trace bar
+TRACE_MAX         = 10               # how many recent pages to remember per user
+
 SECTION_EDIT_MIN  = 1              # minimum heading level to show [edit] section buttons (1 is h1 is ======)
 SECTION_EDIT_MAX  = 4              # maximum heading level to show [edit] section buttons (5 is h5 is ==)
 
@@ -79,6 +82,7 @@ DARK_BORDER        = "#333333"   # general border and separator colour (used thr
 DARK_ACCENT        = "#8ab4f8"   # link text, icon-button text, snippet text, tag pill text
 DARK_ACCENT_HOVER  = "#aecbfa"   # link hover colour
 DARK_PIN_BAR_BG    = "#0a0a0a"   # pinned-pages bar background
+DARK_TRACE_BAR_BG  = "#0d1117"   # recently-visited trace bar background (dark mode)
 DARK_PRE_BG        = "#141414"   # fenced code block (<pre>) background
 DARK_TABLE_ALT     = "#1e1e1e"   # alternating table row background
 DARK_TAG_BG        = "#252525"   # tag pill background
@@ -810,6 +814,9 @@ mark{background:#fff3cd;padding:0 .1rem;border-radius:2px}
 .search-hit{font-size:.85rem;font-family:monospace;color:#444;padding:.15rem .3rem;border-left:3px solid #ddd;margin:.2rem 0}
 .pin-bar{background:#243447;padding:.3rem 1rem;display:flex;gap:.5rem;flex-wrap:wrap;align-items:center;font-size:.85rem}
 .pin-bar a{color:#8ab4f8;text-decoration:none;background:rgba(255,255,255,.08);padding:.15rem .5rem;border-radius:3px}.pin-bar a:hover{text-decoration:underline}
+.trace-bar{background:#e5eaee;padding:.2rem 1rem;font-size:.78rem;color:#666;display:flex;flex-wrap:wrap;gap:0 .15rem;align-items:center}
+.trace-bar .trace-label{font-weight:600;margin-right:.3rem;color:#555;white-space:nowrap}
+.trace-bar a{color:#2c3e50;text-decoration:none}.trace-bar a:hover{text-decoration:underline}
 .line-del{font-size:.7rem;color:#c0392b;text-decoration:none;margin-left:.4rem;opacity:.3;vertical-align:middle;position:relative;top:-.2em}@media(hover:hover){.line-del:hover{opacity:1}}
 .line-del.confirm{opacity:1;font-size:.75rem;background:#c0392b;color:#fff;padding:.1rem .4rem;border-radius:3px}
 """
@@ -849,6 +856,7 @@ mark{background:#5a4a00;color:#ffd}
 .search-page-result{background:#16213e;border-color:#2a3f6f}
 .search-hit{color:#8ab4f8;border-left-color:#2a3f6f}
 .pin-bar{background:#0e1f33}
+.trace-bar{background:#0d1117;color:#555}.trace-bar .trace-label{color:#666}.trace-bar a{color:#7a9fd4}
 .todo-done{color:#8a9a9a}
 input[type=checkbox]{background:#1a1a2e;border-color:#e74c3c}
 input[type=checkbox]:checked{background:#e74c3c;border-color:#e74c3c}
@@ -1067,6 +1075,7 @@ _CSS_FINAL  = (CSS
     .replace('#8ab4f8', DARK_ACCENT)
     .replace('#aecbfa', DARK_ACCENT_HOVER)
     .replace('#0e1f33', DARK_PIN_BAR_BG)
+    .replace('#0d1117', DARK_TRACE_BAR_BG)
     .replace('#111827', DARK_PRE_BG)
     .replace('#14192e', DARK_TABLE_ALT)
     .replace('#1e3a4a', DARK_TAG_BG)
@@ -1199,7 +1208,47 @@ def _set_pins_cookie(response, pins: list[str]):
                         httponly=True, samesite="strict", secure=HTTPS_ENABLED, path="/")
 
 
-def pins_bar(request: Request | None) -> str:
+# ── trace (recently-visited) helpers ─────────────────────────────────────────
+
+def _get_trace(username: str) -> list[str]:
+    """Return the user's recently-visited page list (most recent first)."""
+    raw = _get_user_setting(username, "trace")
+    if not raw:
+        return []
+    try:
+        result = json.loads(raw)
+        return result if isinstance(result, list) else []
+    except Exception:
+        return []
+
+
+def _update_trace(username: str, name: str) -> None:
+    """Prepend name to the user's trace list and persist it, capped at TRACE_MAX."""
+    if not username or not TRACE_ENABLED:
+        return
+    trace = _get_trace(username)
+    trace.insert(0, name)
+    _set_user_setting(username, "trace", json.dumps(trace[:TRACE_MAX]))
+
+
+def trace_bar(request: Request | None) -> str:
+    """Return DokuWiki-style trace bar HTML, or '' if disabled/unavailable."""
+    if not TRACE_ENABLED:
+        return ""
+    username = (getattr(request.state, "username", "") or "") if request is not None else ""
+    if not username:
+        return ""
+    trace = _get_trace(username)
+    if not trace:
+        return ""
+    items = " \u2022 ".join(
+        f'<a href="/wiki/{html.escape(p)}">{html.escape(p.split("/")[-1])}</a>'
+        for p in trace
+    )
+    return f'<div class="trace-bar"><span class="trace-label">Trace:</span> \u2022 {items}</div>'
+
+
+
     pins = _get_pins(request)
     if USER_PAGE_HIDDEN and USER_PAGE_NS:
         requester = (getattr(request.state, "username", "") or "") if request is not None else ""
@@ -1415,7 +1464,8 @@ def _real_ip(request: Request) -> str:
     peer = request.client.host if request.client else "unknown"
     if TRUSTED_PROXY and peer in TRUSTED_PROXY:
         xff = request.headers.get("x-forwarded-for", "").split(",")
-        candidate = xff[0].strip()
+        # Take the rightmost entry — added by the trusted proxy, not client-controllable
+        candidate = xff[-1].strip()
         if candidate:
             return candidate
     return peer
@@ -1424,7 +1474,10 @@ def _check_rate(ip: str) -> bool:
     """Return True if the IP is allowed to attempt login, False if locked out."""
     now = time.monotonic()
     hits = [t for t in _fail_log.get(ip, []) if now - t < _FAIL_WINDOW]
-    _fail_log[ip] = hits
+    if hits:
+        _fail_log[ip] = hits
+    else:
+        _fail_log.pop(ip, None)
     return len(hits) < _FAIL_MAX
 
 def _record_fail(ip: str):
@@ -1896,7 +1949,9 @@ def view(request: Request, name: str, _auth: None = Depends(require_auth)):
         f'border-radius:50%;background:#27ae60;color:#fff;border:none;font-size:1.5rem;'
         f'cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,.3);line-height:1">+</button>'
     )
-    body = f'{toolbar}{todo_bar}{fab}<div class="layout read-layout"><div class="content">{rendered}</div>{toc_html(headings, _toc_max(meta))}</div>'
+    username = (getattr(request.state, "username", "") or "") if request is not None else ""
+    _update_trace(username, name)
+    body = f'{toolbar}{trace_bar(request)}{todo_bar}{fab}<div class="layout read-layout"><div class="content">{rendered}</div>{toc_html(headings, _toc_max(meta))}</div>'
     return HTMLResponse(shell(name.split("/")[-1], body, request=request))
 
 
@@ -2649,7 +2704,7 @@ async def login_post(request: Request, username: str = Form(""), password: str =
                            f"====== {username} ======\n\nWelcome to my page.\n")
         except (ValueError, OSError):
             pass  # username not valid as a page-name segment, or disk error — don't block login
-    safe_next = next if re.match(r'^/[^/\\]', next) else "/wiki/Home"
+    safe_next = next if re.fullmatch(r'/[^/\\\r\n][^\r\n]*', next) else "/wiki/Home"
     resp = RedirectResponse(safe_next, status_code=303)
     secure_cookie = HTTPS_ENABLED or request.url.scheme == "https"
     _auth_log.info("login_post: user=%s scheme=%s secure=%s next=%s",
@@ -2797,7 +2852,7 @@ async def _do_upload(ns: str, files: list[UploadFile], request: Request | None =
             break
         safe_stem = re.sub(r"[^A-Za-z0-9_\-]", "_", Path(f.filename).stem)[:40] or "file"
         uname = f"{safe_stem}_{secrets.token_hex(4)}.{ext}"
-        (dest / uname).write_bytes(data)
+        await asyncio.to_thread((dest / uname).write_bytes, data)
         ns_c = ns.replace("/", ":") if ns else ""
         lbl = re.sub(r"[|{}\[\]]", "_", Path(f.filename).stem)
         is_img = ext in IMAGE_EXTS
