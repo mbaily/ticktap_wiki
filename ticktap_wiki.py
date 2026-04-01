@@ -52,7 +52,8 @@ MARKUP_BAR_MOBILE  = True          # show the editor markup toolbar on mobile (â
 # Nav-bar items that should show only their icon (no label text), saving space.
 # Recognised values: "new", "today", "tags", "orphans", "mypage"
 # Example: NAV_ICON_ONLY = {"new", "today", "tags", "orphans", "mypage"}
-NAV_ICON_ONLY: set[str] = set()
+# NAV_ICON_ONLY: set[str] = set()
+NAV_ICON_ONLY = {"new", "today", "tags", "orphans", "mypage"}
 
 EDIT_PAGE_PADDING  = "2px"        # left/right padding of the edit page layout (CSS length, e.g. "0rem", "1rem", "16px")
 READ_PAGE_PADDING  = "2px"       # left/right padding of the read page layout (CSS length, e.g. "0rem", "1rem", "16px")
