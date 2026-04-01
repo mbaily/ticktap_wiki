@@ -1438,6 +1438,14 @@ def root(request: Request, _auth: None = Depends(require_auth)):
                 return RedirectResponse(f"/wiki/{target}")
             except ValueError:
                 pass  # invalid saved setting, fall through to default
+        # No explicit setting — derive from USER_PAGE_NS/username/USER_HOME_PAGE (same as /me)
+        if USER_PAGE_NS and re.fullmatch(r"[A-Za-z0-9_\-]+", username):
+            target = normalize_name(f"{USER_PAGE_NS}/{username}/{USER_HOME_PAGE}")
+            try:
+                page_path(target)  # validate segments
+                return RedirectResponse(f"/wiki/{target}")
+            except ValueError:
+                pass
     return RedirectResponse("/wiki/Home")
 
 
