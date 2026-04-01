@@ -738,7 +738,7 @@ nav form{margin-left:0}nav input[type=search]{padding:.3rem .6rem;border-radius:
 .toolbar{background:#ecf0f1;padding:.4rem 1rem;display:flex;gap:.6rem;align-items:center;font-size:.9rem;flex-wrap:wrap}
 .toolbar .breadcrumb{margin-bottom:0}
 .toolbar a,.toolbar button{color:#2c3e50;background:none;border:1px solid #aaa;padding:.2rem .5rem;border-radius:3px;cursor:pointer;font-size:.85rem;text-decoration:none}
-.layout{display:flex;max-width:1100px;margin:.35rem auto 1rem;gap:1rem;padding:0 1rem}
+.layout{display:flex;max-width:1100px;margin:.15rem auto 1rem;gap:1rem;padding:0 1rem}
 .content{flex:1;min-width:0;background:#fff;padding:1rem;border-radius:4px;border:1px solid #ddd}
 .content.edit-page{padding:0;border:none;background:transparent}
 .layout.edit-layout{padding:0 __EDIT_PAD__}
@@ -1227,6 +1227,7 @@ def _update_trace(username: str, name: str) -> None:
     if not username or not TRACE_ENABLED:
         return
     trace = _get_trace(username)
+    trace = [p for p in trace if p != name]  # remove existing occurrence
     trace.insert(0, name)
     _set_user_setting(username, "trace", json.dumps(trace[:TRACE_MAX]))
 
