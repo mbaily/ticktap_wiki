@@ -1248,7 +1248,7 @@ def trace_bar(request: Request | None) -> str:
     return f'<div class="trace-bar"><span class="trace-label">Trace:</span> \u2022 {items}</div>'
 
 
-
+def pins_bar(request: Request | None) -> str:
     pins = _get_pins(request)
     if USER_PAGE_HIDDEN and USER_PAGE_NS:
         requester = (getattr(request.state, "username", "") or "") if request is not None else ""
