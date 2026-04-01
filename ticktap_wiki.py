@@ -2000,7 +2000,7 @@ def search(request: Request, q: str = "", _auth: None = Depends(require_auth)):
                     snippets.append(f'<div class="search-hit"{bg}>{line_h}</div>')
         results.append(
             f'<div class="search-page-result">'
-            f'<h3><a href="/wiki/{html.escape(pname)}">{html.escape(pname)}</a>'
+            f'<h3><a href="/wiki/{html.escape(pname)}">{html.escape(pname.replace("/", ":"))}</a>'
             f' <small style="color:#888;font-weight:normal">({len(hit_indices)} match{"es" if len(hit_indices) != 1 else ""})</small></h3>'
             f'{"".join(snippets)}</div>'
         )
@@ -2023,20 +2023,23 @@ def rename_get(request: Request, name: str, _auth: None = Depends(require_auth))
         return HTMLResponse("Invalid page name", 400)
     if not p.exists():
         return HTMLResponse("Page not found", 404)
-    display = html.escape(name)
+    display = html.escape(name.replace("/", ":"))
+    display_slash = html.escape(name)  # used in href only
     body = (f'<div class="layout"><div class="content">'
             f'<h1>&#9999; Rename page</h1>'
             f'<p>Current name: <strong>{display}</strong></p>'
             f'<form method="post" style="margin-top:.8rem">'
             f'<label style="display:block;margin-bottom:.5rem">New name:'
             f'<input type="text" name="new_name" value="{display}" required autofocus '
+            f'pattern="[A-Za-z0-9_ \\-:]+" '
             f'style="margin-left:.5rem;padding:.3rem .5rem;font-size:1rem;width:320px;max-width:100%">'
             f'</label>'
             f'<p class="notice" style="margin:.6rem 0;font-size:.85rem;color:#555">'
+            f'Use <code>:</code> for namespaces, e.g. <code>projects:MyPage</code>. '
             f'All links in all pages pointing to this page will be updated automatically.</p>'
             f'<button type="submit" style="background:#2980b9;color:#fff;border-color:#1a5276">'
             f'Rename</button>'
-            f'&nbsp;<a href="/wiki/{display}">Cancel</a>'
+            f'&nbsp;<a href="/wiki/{display_slash}">Cancel</a>'
             f'</form></div></div>')
     return HTMLResponse(shell(f"Rename \u2014 {name}", body, request=request))
 
@@ -2044,7 +2047,7 @@ def rename_get(request: Request, name: str, _auth: None = Depends(require_auth))
 @app.post("/rename/{name:path}", response_class=HTMLResponse)
 async def rename_post(request: Request, name: str, new_name: str = Form(""), _auth: None = Depends(require_auth)):
     name = normalize_name(name)
-    new_name = normalize_name(new_name.strip())
+    new_name = normalize_name(new_name.strip().replace(":", "/"))
     try:
         old_path = page_path(name)
     except ValueError:
@@ -2058,7 +2061,7 @@ async def rename_post(request: Request, name: str, new_name: str = Form(""), _au
     try:
         new_path = page_path(new_name)
     except ValueError:
-        return HTMLResponse("Invalid new page name — use only letters, digits, hyphens, underscores and / for namespaces", 400)
+        return HTMLResponse("Invalid new page name — use only letters, digits, hyphens, underscores and <code>:</code> for namespaces", 400)
     if name == new_name:
         return RedirectResponse(f"/wiki/{name}", status_code=303)
     if new_path.exists():
@@ -2143,8 +2146,8 @@ async def rename_post(request: Request, name: str, new_name: str = Form(""), _au
     if attic_warning:
         body = (f'<div class="layout"><div class="content">'
                 f'<h1>Page renamed</h1>'
-                f'<p><strong>{html.escape(name)}</strong> \u2192 '
-                f'<a href="/wiki/{html.escape(new_name)}">{html.escape(new_name)}</a></p>'
+                f'<p><strong>{html.escape(name.replace("/", ":"))}</strong> \u2192 '
+                f'<a href="/wiki/{html.escape(new_name)}">{html.escape(new_name.replace("/", ":"))}</a></p>'
                 f'{attic_warning}'
                 f'</div></div>')
         return HTMLResponse(shell(f"Renamed \u2014 {new_name}", body, request=request))
@@ -2783,7 +2786,7 @@ def tag_pages(request: Request, tag: str, _auth: None = Depends(require_auth)):
         except OSError:
             mtime = ""
         results.append(
-            f'<li><a href="/wiki/{html.escape(pname)}">{html.escape(pname)}</a>'
+            f'<li><a href="/wiki/{html.escape(pname)}">{html.escape(pname.replace("/", ":"))}</a>'
             f'<small style="color:#888;margin-left:.4rem">{mtime}</small></li>'
         )
     body = (
