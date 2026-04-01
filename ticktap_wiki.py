@@ -172,8 +172,11 @@ def _save_snapshot(name: str, content: str):
     if snap.exists():
         return  # same-second save: keep the first snapshot of this second
     tmp = snap.with_suffix(".tmp")
-    tmp.write_text(content, encoding="utf-8", newline="\n")
-    tmp.replace(snap)
+    try:
+        tmp.write_text(content, encoding="utf-8", newline="\n")
+        tmp.replace(snap)
+    finally:
+        tmp.unlink(missing_ok=True)
 
 def _prune_attic(name: str):
     d = _attic_page_dir(name)
@@ -1169,7 +1172,9 @@ def _save_tokens(tokens: dict):
     tmp = TOKEN_FILE.parent / f"{TOKEN_FILE.name}.{secrets.token_hex(4)}.tmp"
     try:
         tmp.write_text(json.dumps(tokens, indent=2), encoding="utf-8")
+        tmp.chmod(0o600)
         tmp.replace(TOKEN_FILE)
+        TOKEN_FILE.chmod(0o600)
     finally:
         tmp.unlink(missing_ok=True)
 
@@ -1339,7 +1344,7 @@ def my_page(request: Request, _auth: None = Depends(require_auth)):
     username = request.state.username
     if not username:
         return RedirectResponse("/wiki/Home", status_code=303)
-    return RedirectResponse(f"/wiki/{USER_PAGE_NS}/{username}", status_code=303)
+    return RedirectResponse(f"/wiki/{USER_PAGE_NS}/{quote(username, safe='')}", status_code=303)
 
 
 @app.get("/wiki/{name:path}", response_class=HTMLResponse)
@@ -1510,6 +1515,7 @@ def view(request: Request, name: str, _auth: None = Depends(require_auth)):
 @app.get("/sect/{name:path}/{idx}", response_class=HTMLResponse)
 def edit_section_get(request: Request, name: str, idx: int, _auth: None = Depends(require_auth)):
     name = normalize_name(name)
+    _check_page_owner(request, name)
     if idx < 0:
         return HTMLResponse("Section not found", 400)
     try:
@@ -1539,8 +1545,9 @@ def edit_section_get(request: Request, name: str, idx: int, _auth: None = Depend
 
 
 @app.post("/sect/{name:path}/{idx}", response_class=HTMLResponse)
-async def edit_section_post(name: str, idx: int, content: str = Form(""), anchor: str = Form(""), _auth: None = Depends(require_auth)):
+async def edit_section_post(request: Request, name: str, idx: int, content: str = Form(""), anchor: str = Form(""), _auth: None = Depends(require_auth)):
     name = normalize_name(name)
+    _check_page_owner(request, name)
     if idx < 0:
         return HTMLResponse("Section not found", 400)
     try:
@@ -1573,10 +1580,12 @@ def _check_page_owner(request: Request, name: str):
     if not requester:
         # Auth is disabled or no identity — ownership cannot be determined, allow.
         return
+    ns_parts = USER_PAGE_NS.split("/")
+    ns_depth = len(ns_parts)
     parts = name.split("/")
-    if parts[0] != USER_PAGE_NS or len(parts) < 2:
+    if parts[:ns_depth] != ns_parts or len(parts) <= ns_depth:
         return
-    owner = parts[1]
+    owner = parts[ns_depth]
     if requester != owner:
         from fastapi import HTTPException
         raise HTTPException(status_code=403, detail="You may only edit your own user page.")
@@ -1647,6 +1656,7 @@ async def preview(name: str = Form(""), content: str = Form(""), _auth: None = D
 @app.post("/toggle/{name:path}/{line}", response_class=HTMLResponse)
 async def toggle(request: Request, name: str, line: int, _auth: None = Depends(require_auth)):
     name = normalize_name(name)
+    _check_page_owner(request, name)
     if line < 0:
         return HTMLResponse("Out of range", 400)
     try:
@@ -1683,6 +1693,7 @@ async def toggle(request: Request, name: str, line: int, _auth: None = Depends(r
 @app.post("/add-todo/{name:path}")
 async def add_todo(name: str, request: Request, _auth: None = Depends(require_auth)):
     name = normalize_name(name)
+    _check_page_owner(request, name)
     try:
         body = await request.json()
     except Exception:
@@ -1721,8 +1732,9 @@ async def add_todo(name: str, request: Request, _auth: None = Depends(require_au
 
 
 @app.post("/delete-line/{name:path}/{line}")
-async def delete_line(name: str, line: int, _auth: None = Depends(require_auth)):
+async def delete_line(request: Request, name: str, line: int, _auth: None = Depends(require_auth)):
     name = normalize_name(name)
+    _check_page_owner(request, name)
     if line < 0:
         return JSONResponse({"ok": False, "error": "Invalid line"}, status_code=400)
     try:
@@ -1943,6 +1955,7 @@ async def rename_post(request: Request, name: str, new_name: str = Form(""), _au
         old_path = page_path(name)
     except ValueError:
         return HTMLResponse("Invalid page name", 400)
+    _check_page_owner(request, name)
     if not old_path.exists():
         return HTMLResponse("Page not found", 404)
     if not new_name:
@@ -2050,6 +2063,7 @@ def delete_get(request: Request, name: str, _auth: None = Depends(require_auth))
         page_path(name)  # validate name; raises ValueError on bad input
     except ValueError:
         return HTMLResponse("Invalid page name", 400)
+    _check_page_owner(request, name)
     body = (f'<div class="layout"><div class="content">'
             f'<h1>Delete page</h1>'
             f'<div class="notice">Are you sure you want to delete <strong>{html.escape(name)}</strong>?</div>'
@@ -2062,8 +2076,9 @@ def delete_get(request: Request, name: str, _auth: None = Depends(require_auth))
 
 
 @app.post("/delete/{name:path}", response_class=HTMLResponse)
-async def delete_post(name: str, confirm: str = Form(""), _auth: None = Depends(require_auth)):
+async def delete_post(request: Request, name: str, confirm: str = Form(""), _auth: None = Depends(require_auth)):
     name = normalize_name(name)
+    _check_page_owner(request, name)
     if confirm != "yes":
         return RedirectResponse(f"/wiki/{name}", status_code=303)
     try:
@@ -2129,7 +2144,7 @@ async def login_post(request: Request, username: str = Form(""), password: str =
             pass  # username not valid as a page-name segment, or disk error — don't block login
     safe_next = next if next.startswith("/") and not next.startswith("//") else "/wiki/Home"
     resp = RedirectResponse(safe_next, status_code=303)
-    secure_cookie = request.url.scheme == "https"
+    secure_cookie = HTTPS_ENABLED or request.url.scheme == "https"
     _auth_log.info("login_post: user=%s scheme=%s secure=%s next=%s",
                    username, request.url.scheme, secure_cookie, safe_next)
     resp.set_cookie("wiki_token", token, max_age=TOKEN_EXPIRY_DAYS * 86400,
