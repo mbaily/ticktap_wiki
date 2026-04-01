@@ -1408,9 +1408,13 @@ def _check_password(username: str, password: str) -> bool:
         import bcrypt as _bcrypt  # type: ignore
     except ImportError:
         return False
+    # Dummy hash used for constant-time comparison when username is not found,
+    # preventing timing-based username enumeration.
+    _DUMMY = b"$2b$12$aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
     try:
         lines = HTPASSWD_FILE.read_text(encoding="utf-8").splitlines()
     except OSError:
+        _bcrypt.checkpw(password.encode(), _DUMMY)
         return False
     for line in lines:
         line = line.strip()
@@ -1427,6 +1431,8 @@ def _check_password(username: str, password: str) -> bool:
             return _bcrypt.checkpw(password.encode(), hb)
         except Exception:
             return False
+    # Username not found — run bcrypt against a dummy hash to equalise response time
+    _bcrypt.checkpw(password.encode(), _DUMMY)
     return False
 
 def _htpasswd_set(username: str, password: str, htfile: Path):
@@ -2856,6 +2862,9 @@ def orphans(request: Request, _auth: None = Depends(require_auth)):
             text = wf.read_text(encoding="utf-8")
         except OSError:
             continue
+        # Strip fenced code blocks so references inside examples don't count
+        text = re.sub(r"```[\s\S]*?```", "", text)
+        text = re.sub(r"`[^`\n]+`", "", text)
         for m in REF_RE.finditer(text):
             raw = (m.group(1) or m.group(2)).strip()
             # strip leading :
