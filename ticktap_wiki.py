@@ -1,4 +1,4 @@
-import os, re, html, time, secrets, json, math, shutil, hashlib, base64, logging
+import os, re, html, time, secrets, json, math, shutil, hashlib, base64, logging, dbm
 from urllib.parse import quote
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
@@ -93,10 +93,37 @@ USER_PAGE_AUTOCREATE = True    # write a stub on first login if the page doesn't
 USER_PAGE_PRIVATE    = False   # True → only the owner may edit their own user page
 USER_PAGE_HIDDEN     = False   # True → only the owner may read/view their own user pages and files
 USER_HOME_PAGE       = "Home"  # page name for the user's landing page within their sub-namespace
+USER_SETTINGS_FILE   = Path(__file__).parent / ".wiki_user_settings"  # dbm file for per-user preferences
 
 app = FastAPI()
 
-# ── storage helpers ────────────────────────────────────────────────────────────
+# ── user settings helpers ─────────────────────────────────────────────────────
+
+def _get_user_setting(username: str, key: str, default: str = "") -> str:
+    """Return a per-user setting value from the dbm store."""
+    if not username:
+        return default
+    try:
+        with dbm.open(str(USER_SETTINGS_FILE), "c") as db:
+            raw = db.get(f"{username}:{key}")
+            if raw is None:
+                return default
+            return raw.decode() if isinstance(raw, (bytes, bytearray)) else raw
+    except Exception:
+        return default
+
+
+def _set_user_setting(username: str, key: str, value: str) -> None:
+    """Persist a per-user setting value in the dbm store."""
+    if not username:
+        return
+    try:
+        with dbm.open(str(USER_SETTINGS_FILE), "c") as db:
+            db[f"{username}:{key}"] = value
+    except Exception:
+        pass
+
+
 
 def normalize_name(name: str) -> str:
     """Replace spaces with underscores in each path segment (DokuWiki-style encoding)."""
@@ -123,6 +150,8 @@ def write_page(name: str, content: str, snapshot: bool = True):
     # Normalise line endings: browsers send \r\n; Python text-mode write on
     # Windows would then double-expand \r\n → \r\r\n, blowing up blank lines.
     content = content.replace("\r\n", "\n").replace("\r", "\n")
+    # Strip null bytes — they break the stash/restore mechanism in parse_inline.
+    content = content.replace("\x00", "")
     if VERSIONING_ENABLED and snapshot and p.exists():
         try:
             _save_snapshot(name, p.read_text(encoding="utf-8"))
@@ -1006,6 +1035,8 @@ def nav_bar(search_q: str = "", username: str = "") -> str:
     q = html.escape(search_q)
     my_page_link = (f'<a href="/me">&#128100; My page</a>'
                     if (USER_PAGE_NS and username) else "")
+    settings_link = (f'<a href="/settings" title="Settings">&#9881;</a>'
+                     if username else "")
     logout = (f' <a href="/logout" style="margin-left:auto;font-size:.85rem;color:#ecf0f1">'
               f'&#128274; logout ({html.escape(username)})</a>') if username else ""
     return (f'<nav><a href="/wiki/Home"><strong>&#128366; {html.escape(SITE_TITLE)}</strong></a>'
@@ -1014,9 +1045,11 @@ def nav_bar(search_q: str = "", username: str = "") -> str:
             f'<a href="/tags">&#127991; Tags</a>'
             f'<a href="/orphans">&#128204; Orphaned Files</a>'
             f'{my_page_link}'
+            f'{settings_link}'
             f'{logout}'
-            f'<form method="get" action="/search" {"" if username else "style=\"margin-left:auto\""}>' 
-            f'<input type="search" name="q" placeholder="Search…" value="{q}"></form></nav>')
+            f'<form method="get" action="/search" {"" if username else "style=\"margin-left:auto\""}>'
+            f'<input type="search" name="q" placeholder="Search\u2026" value="{q}"></form></nav>')
+
 
 def _get_pins(request: Request | None) -> list[str]:
     """Return the validated list of pinned page names from the wiki_pins cookie."""
@@ -1349,7 +1382,19 @@ def favicon(request: Request):
                              "ETag": _ICON_ETAG})
 
 @app.get("/")
-def root(): return RedirectResponse("/wiki/Home")
+def root(request: Request, _auth: None = Depends(require_auth)):
+    username = getattr(request.state, "username", "") or ""
+    if username:
+        saved = _get_user_setting(username, "home_page")
+        if saved:
+            # Convert colon-form to slash-form for the URL
+            target = normalize_name(saved.replace(":", "/"))
+            try:
+                page_path(target)  # validate
+                return RedirectResponse(f"/wiki/{target}")
+            except ValueError:
+                pass  # invalid saved setting, fall through to default
+    return RedirectResponse("/wiki/Home")
 
 
 @app.get("/me")
@@ -1359,7 +1404,79 @@ def my_page(request: Request, _auth: None = Depends(require_auth)):
     username = request.state.username
     if not username:
         return RedirectResponse("/wiki/Home", status_code=303)
+    # Validate that the username forms a valid page-name segment; usernames with
+    # dots, @ or other special chars can't be used as wiki page segments.
+    for _seg in [USER_PAGE_NS.split("/")[0], username]:
+        if not re.fullmatch(r"[A-Za-z0-9_\-]+", _seg):
+            return RedirectResponse("/wiki/Home", status_code=303)
     return RedirectResponse(f"/wiki/{USER_PAGE_NS}/{quote(username, safe='')}/{quote(USER_HOME_PAGE, safe='')}", status_code=303)
+
+
+@app.get("/settings", response_class=HTMLResponse)
+def settings_get(request: Request, saved: str = "", _auth: None = Depends(require_auth)):
+    username = getattr(request.state, "username", "") or ""
+    if not username:
+        return RedirectResponse("/login", status_code=303)
+    # Build default home page suggestion
+    if USER_PAGE_NS and re.fullmatch(r"[A-Za-z0-9_\-]+", username):
+        default_home = f"{USER_PAGE_NS.replace('/', ':')}:{username}:{USER_HOME_PAGE}"
+    else:
+        default_home = "Home"
+    current_home = _get_user_setting(username, "home_page") or default_home
+    saved_banner = ('<div class="notice" style="background:#d4edda;border-color:#28a745;color:#155724;margin-bottom:.8rem">'
+                   '&#10003; Settings saved.</div>') if saved == "1" else ""
+    body = (
+        f'<div class="layout"><div class="content">'
+        f'<h1>&#9881; Settings</h1>'
+        f'{saved_banner}'
+        f'<form method="post" action="/settings" style="max-width:500px">'
+        f'<fieldset style="border:1px solid #ccc;border-radius:4px;padding:1rem;margin-bottom:1rem">'
+        f'<legend style="padding:0 .4rem;font-weight:bold">Navigation</legend>'
+        f'<label style="display:block;margin-bottom:.4rem;font-size:.9rem">'
+        f'Home page (shown when you open the site):'
+        f'<input type="text" name="home_page" value="{html.escape(current_home)}" '
+        f'pattern="[A-Za-z0-9_\\-:]+" '
+        f'style="display:block;width:100%;margin-top:.3rem;padding:.35rem .5rem;font-size:1rem;'
+        f'box-sizing:border-box" '
+        f'placeholder="e.g. {html.escape(default_home)}">'
+        f'<small style="color:#888">Use <code>:</code> for namespaces. '
+        f'Leave blank to use the site default (<code>Home</code>).</small>'
+        f'</label>'
+        f'</fieldset>'
+        f'<button type="submit" style="padding:.4rem .9rem;background:#2980b9;color:#fff;'
+        f'border:1px solid #1a5276;border-radius:3px;cursor:pointer">Save</button>'
+        f'&nbsp;<a href="/">Cancel</a>'
+        f'</form></div></div>'
+    )
+    return HTMLResponse(shell("Settings", body, request=request))
+
+
+@app.post("/settings", response_class=HTMLResponse)
+async def settings_post(request: Request, home_page: str = Form(""), _auth: None = Depends(require_auth)):
+    username = getattr(request.state, "username", "") or ""
+    if not username:
+        return RedirectResponse("/login", status_code=303)
+    home_page = home_page.strip()
+    if home_page:
+        # Validate: convert colon form to slash, then check each segment
+        target = normalize_name(home_page.replace(":", "/"))
+        try:
+            page_path(target)
+        except ValueError:
+            body = (
+                f'<div class="layout"><div class="content">'
+                f'<h1>&#9881; Settings</h1>'
+                f'<div class="notice" style="background:#f8d7da;border-color:#f5c6cb;color:#721c24">'
+                f'Invalid page name — use only letters, digits, hyphens, underscores and '
+                f'<code>:</code> for namespaces.</div>'
+                f'<p><a href="/settings">&larr; Back</a></p>'
+                f'</div></div>'
+            )
+            return HTMLResponse(body, status_code=400)
+        _set_user_setting(username, "home_page", home_page)
+    else:
+        _set_user_setting(username, "home_page", "")
+    return RedirectResponse("/settings?saved=1", status_code=303)
 
 
 @app.get("/wiki/{name:path}", response_class=HTMLResponse)
@@ -1911,6 +2028,7 @@ def ns_view(request: Request, ns: str, _auth: None = Depends(require_auth)):
     if not ns_dir.is_dir():
         return HTMLResponse("Namespace not found", 404)
     ns_clean = ns.strip("/")
+    ns_display = ns_clean.replace("/", ":")
     requester = getattr(request.state, "username", "") or ""
     _hide = (lambda p: _is_user_ns(p)[0] and _is_user_ns(p)[1] != requester) if USER_PAGE_HIDDEN else None
     # When USER_PAGE_HIDDEN is active, suppress the files section for a user sub-namespace
@@ -1918,11 +2036,11 @@ def ns_view(request: Request, ns: str, _auth: None = Depends(require_auth)):
     _in_ns, _ns_owner = _is_user_ns(ns_clean) if ns_clean else (False, "")
     _hide_files = USER_PAGE_HIDDEN and _in_ns and _ns_owner != requester
     body = (f'<div class="layout"><div class="content">'
-            f'<h1>Namespace: {html.escape(ns)}</h1>'
+            f'<h1>Namespace: {html.escape(ns_display)}</h1>'
             f'{dir_listing(ns_dir, ns_clean, _hide)}'
             f'{"" if _hide_files else files_section(ns_clean)}'
             f'</div></div>')
-    return HTMLResponse(shell(f"ns:{ns}", body, request=request))
+    return HTMLResponse(shell(f"ns:{ns_display}", body, request=request))
 
 
 @app.get("/sitemap", response_class=HTMLResponse)
@@ -1937,7 +2055,7 @@ def sitemap(request: Request, _auth: None = Depends(require_auth)):
                     _in_ns, _owner = _is_user_ns(rel)
                     if _in_ns and _owner != requester:
                         continue
-                s += f'<li>&#128193; <a href="/ns/{rel}"><strong>{html.escape(child.name)}/</strong></a>{tree(child, rel)}</li>'
+                s += f'<li>&#128193; <a href="/ns/{rel}"><strong>{html.escape(child.name)}:</strong></a>{tree(child, rel)}</li>'
             elif child.suffix == ".wiki" and not child.name.startswith("_"):
                 pname = f"{prefix}/{child.stem}" if prefix else child.stem
                 if USER_PAGE_HIDDEN:
@@ -2128,6 +2246,13 @@ async def rename_post(request: Request, name: str, new_name: str = Form(""), _au
     # Move the page file
     new_path.parent.mkdir(parents=True, exist_ok=True)
     old_path.rename(new_path)
+    # Remove empty source namespace directory (best-effort)
+    try:
+        old_dir = old_path.parent
+        if old_dir != PAGES_DIR and old_dir.is_dir() and not any(old_dir.iterdir()):
+            old_dir.rmdir()
+    except OSError:
+        pass
 
     # Move attic snapshots (best-effort — failure doesn't block the rename)
     attic_warning = ""
@@ -2166,7 +2291,7 @@ def delete_get(request: Request, name: str, _auth: None = Depends(require_auth))
     _check_page_owner(request, name)
     body = (f'<div class="layout"><div class="content">'
             f'<h1>Delete page</h1>'
-            f'<div class="notice">Are you sure you want to delete <strong>{html.escape(name)}</strong>?</div>'
+            f'<div class="notice">Are you sure you want to delete <strong>{html.escape(name.replace("/", ":"))}</strong>?</div>'
             f'<form method="post" style="margin-top:.8rem">'
             f'<input type="hidden" name="confirm" value="yes">'
             f'<button type="submit" style="background:#c0392b;color:#fff;border-color:#a93226">Yes, delete</button>'
@@ -2535,7 +2660,7 @@ def orphans(request: Request, _auth: None = Depends(require_auth)):
                    f'style="background:none;border:none;cursor:pointer;color:#c0392b;font-size:1.1rem">&#128465;</button></form>')
         rows += (f'<tr>'
                  f'<td style="padding:.4rem .6rem">{preview}<a href="/files/{html.escape(rel)}">{html.escape(filename)}</a></td>'
-                 f'<td style="padding:.4rem .6rem;color:#888">{html.escape(f_ns) if f_ns else "(root)"}</td>'
+                 f'<td style="padding:.4rem .6rem;color:#888">{html.escape(f_ns.replace("/", ":")) if f_ns else "(root)"}</td>'
                  f'<td style="padding:.4rem .6rem;color:#888">{size_str}</td>'
                  f'<td style="padding:.4rem .6rem;color:#888">{mtime}</td>'
                  f'<td style="padding:.4rem .6rem">{del_btn}</td>'
@@ -2750,7 +2875,7 @@ def tags_index(request: Request, _auth: None = Depends(require_auth)):
             f'<li style="margin:.4rem 0"><a href="/tags/{quote(t, safe="")}" class="tag-pill">{html.escape(t)}</a>'
             f' <small style="color:#888">{len(pages)} page{"s" if len(pages) != 1 else ""}</small>'
             f' &mdash; ' + ", ".join(
-                f'<a href="/wiki/{html.escape(p)}">{html.escape(p.split("/")[-1])}</a>'
+                f'<a href="/wiki/{html.escape(p)}">{html.escape(p.replace("/", ":"))}</a>'
                 for p in pages[:8]
             ) + ('&hellip;' if len(pages) > 8 else '') + '</li>'
             for t, pages in sorted(tag_map.items())
