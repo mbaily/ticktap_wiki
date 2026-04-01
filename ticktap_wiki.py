@@ -1133,8 +1133,10 @@ def nav_bar(search_q: str = "", username: str = "") -> str:
         if username else ""
     )
     logout = (
-        f' <a href="/logout" style="margin-left:auto;font-size:.85rem;color:#ecf0f1">'
-        f'&#128274; logout ({html.escape(username)})</a>'
+        f'<form method="post" action="/logout" style="margin-left:auto;display:inline">'
+        f'<button type="submit" style="background:none;border:none;cursor:pointer;'
+        f'color:#ecf0f1;font-size:.85rem;padding:0">&#128274; logout ({html.escape(username)})</button>'
+        f'</form>'
     ) if username else ""
     return (
         f'<nav><a href="/"><strong>&#128366; {html.escape(SITE_TITLE)}</strong></a>'
@@ -1223,8 +1225,8 @@ def _get_trace(username: str) -> list[str]:
 
 
 def _update_trace(username: str, name: str) -> None:
-    """Prepend name to the user's trace list and persist it, capped at TRACE_MAX."""
-    if not username or not TRACE_ENABLED:
+    """Append name to the user's trace list and persist it, capped at TRACE_MAX."""
+    if not username or not TRACE_ENABLED or TRACE_MAX <= 0:
         return
     trace = _get_trace(username)
     trace = [p for p in trace if p != name]  # remove existing occurrence
@@ -2605,9 +2607,44 @@ async def rename_post(request: Request, name: str, new_name: str = Form(""), _au
                 f'<a href="/wiki/{html.escape(new_name)}">{html.escape(new_name.replace("/", ":"))}</a></p>'
                 f'{attic_warning}'
                 f'</div></div>')
+        _rewrite_trace_all_users(name, new_name)
         return HTMLResponse(shell(f"Renamed \u2014 {new_name}", body, request=request))
 
+    _rewrite_trace_all_users(name, new_name)
     return RedirectResponse(f"/wiki/{new_name}", status_code=303)
+
+
+def _rewrite_trace_all_users(old_name: str, new_name: str) -> None:
+    """Update trace history for all users after a page rename (best-effort)."""
+    if not TRACE_ENABLED:
+        return
+    try:
+        con = _get_db()
+        try:
+            rows = con.execute(
+                "SELECT username, value FROM user_settings WHERE key='trace'"
+            ).fetchall()
+            updates = []
+            for (uname, raw) in rows:
+                try:
+                    trace = json.loads(raw)
+                    if not isinstance(trace, list):
+                        continue
+                    new_trace = [new_name if p == old_name else p for p in trace]
+                    if new_trace != trace:
+                        updates.append((json.dumps(new_trace), uname))
+                except Exception:
+                    continue
+            if updates:
+                con.executemany(
+                    "UPDATE user_settings SET value=? WHERE username=? AND key='trace'",
+                    updates,
+                )
+                con.commit()
+        finally:
+            con.close()
+    except Exception:
+        pass  # best-effort; don't block the rename response
 
 
 @app.get("/delete/{name:path}", response_class=HTMLResponse)
@@ -2693,7 +2730,8 @@ async def login_post(request: Request, username: str = Form(""), password: str =
     if not username or not password:
         _record_fail(ip)
         return _login_page(next, "Invalid credentials")
-    if not _check_password(username, password):
+    # Run bcrypt in a thread so it doesn't block the event loop (~100 ms)
+    if not await asyncio.to_thread(_check_password, username, password):
         _record_fail(ip)
         return _login_page(next, "Invalid credentials")
     token = _issue_token(username)
@@ -2715,6 +2753,11 @@ async def login_post(request: Request, username: str = Form(""), password: str =
     return resp
 
 @app.get("/logout")
+async def logout_get(request: Request):
+    """Redirect GET /logout to login page without revoking (guards against CSRF forced-logout)."""
+    return RedirectResponse("/login", status_code=303)
+
+@app.post("/logout")
 async def logout(request: Request):
     token = _get_token(request)
     if token:
