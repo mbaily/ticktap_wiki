@@ -88,6 +88,10 @@ ACCENT_COLOR       = "#3498db"
 #   "{yyyy}-{mm}"                 → [[2026-03]]              (monthly pages, root namespace)
 JOURNAL_PAGE_FORMAT = "Todo {yyyy} {mmmm}"
 
+USER_PAGE_NS         = "user"  # namespace for per-user homepages; set "" to disable
+USER_PAGE_AUTOCREATE = True    # write a stub on first login if the page doesn't exist
+USER_PAGE_PRIVATE    = False   # True → only the owner may edit their own user page
+
 app = FastAPI()
 
 # ── storage helpers ────────────────────────────────────────────────────────────
@@ -995,6 +999,8 @@ def serve_block_editor_js(h: str):
 
 def nav_bar(search_q: str = "", username: str = "") -> str:
     q = html.escape(search_q)
+    my_page_link = (f'<a href="/me">&#128100; My page</a>'
+                    if (USER_PAGE_NS and username) else "")
     logout = (f' <a href="/logout" style="margin-left:auto;font-size:.85rem;color:#ecf0f1">'
               f'&#128274; logout ({html.escape(username)})</a>') if username else ""
     return (f'<nav><a href="/wiki/Home"><strong>&#128366; {html.escape(SITE_TITLE)}</strong></a>'
@@ -1002,6 +1008,7 @@ def nav_bar(search_q: str = "", username: str = "") -> str:
             f'<a href="/today">&#128197; Today</a>'
             f'<a href="/tags">&#127991; Tags</a>'
             f'<a href="/orphans">&#128204; Orphaned Files</a>'
+            f'{my_page_link}'
             f'{logout}'
             f'<form method="get" action="/search" {"" if username else "style=\"margin-left:auto\""}>' 
             f'<input type="search" name="q" placeholder="Search…" value="{q}"></form></nav>')
@@ -1325,6 +1332,16 @@ def favicon(request: Request):
 def root(): return RedirectResponse("/wiki/Home")
 
 
+@app.get("/me")
+def my_page(request: Request, _auth: None = Depends(require_auth)):
+    if not USER_PAGE_NS:
+        return RedirectResponse("/wiki/Home", status_code=303)
+    username = request.state.username
+    if not username:
+        return RedirectResponse("/wiki/Home", status_code=303)
+    return RedirectResponse(f"/wiki/{USER_PAGE_NS}/{username}", status_code=303)
+
+
 @app.get("/wiki/{name:path}", response_class=HTMLResponse)
 def view(request: Request, name: str, _auth: None = Depends(require_auth)):
     name = normalize_name(name)
@@ -1548,9 +1565,27 @@ async def edit_section_post(name: str, idx: int, content: str = Form(""), anchor
     return RedirectResponse(f"/wiki/{name}{frag}", status_code=303)
 
 
+def _check_page_owner(request: Request, name: str):
+    """If USER_PAGE_PRIVATE is enabled, forbid editing another user's page."""
+    if not USER_PAGE_PRIVATE or not USER_PAGE_NS:
+        return
+    requester = getattr(request.state, "username", "") or ""
+    if not requester:
+        # Auth is disabled or no identity — ownership cannot be determined, allow.
+        return
+    parts = name.split("/")
+    if parts[0] != USER_PAGE_NS or len(parts) < 2:
+        return
+    owner = parts[1]
+    if requester != owner:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=403, detail="You may only edit your own user page.")
+
+
 @app.get("/edit/{name:path}", response_class=HTMLResponse)
 def edit_get(request: Request, name: str, _auth: None = Depends(require_auth)):
     name = normalize_name(name)
+    _check_page_owner(request, name)
     try:
         src = read_page(name)
     except ValueError:
@@ -1591,8 +1626,9 @@ def edit_get(request: Request, name: str, _auth: None = Depends(require_auth)):
 
 
 @app.post("/edit/{name:path}", response_class=HTMLResponse)
-async def edit_post(name: str, content: str = Form(""), _auth: None = Depends(require_auth)):
+async def edit_post(request: Request, name: str, content: str = Form(""), _auth: None = Depends(require_auth)):
     name = normalize_name(name)
+    _check_page_owner(request, name)
     try:
         write_page(name, content)
     except ValueError:
@@ -2083,6 +2119,14 @@ async def login_post(request: Request, username: str = Form(""), password: str =
         _record_fail(ip)
         return _login_page(next, "Invalid credentials")
     token = _issue_token(username)
+    if USER_PAGE_NS and USER_PAGE_AUTOCREATE:
+        try:
+            _user_page = f"{USER_PAGE_NS}/{username}"
+            if read_page(_user_page) is None:
+                write_page(_user_page,
+                           f"====== {username} ======\n\nWelcome to my page.\n")
+        except (ValueError, OSError):
+            pass  # username not valid as a page-name segment, or disk error — don't block login
     safe_next = next if next.startswith("/") and not next.startswith("//") else "/wiki/Home"
     resp = RedirectResponse(safe_next, status_code=303)
     secure_cookie = request.url.scheme == "https"
