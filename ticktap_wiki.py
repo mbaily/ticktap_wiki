@@ -779,7 +779,7 @@ document.querySelectorAll('textarea').forEach(ta=>{
       // If the line contains only the prefix (empty item), clear the line instead
       if(pos===afterPrefix&&lineText===indent+prefix){
         // Remove the entire line (including its trailing newline if present)
-        ta.value=v.slice(0,lineStart)+v.slice(pos+(v[pos]==='\n'?1:0));
+        ta.value=v.slice(0,lineStart)+v.slice(pos+(v[pos]==='\\n'?1:0));
         ta.selectionStart=ta.selectionEnd=lineStart;
       }else{
         // Normalise todo prefix to empty state
