@@ -1228,8 +1228,8 @@ def _update_trace(username: str, name: str) -> None:
         return
     trace = _get_trace(username)
     trace = [p for p in trace if p != name]  # remove existing occurrence
-    trace.insert(0, name)
-    _set_user_setting(username, "trace", json.dumps(trace[:TRACE_MAX]))
+    trace.append(name)                        # most recent goes last
+    _set_user_setting(username, "trace", json.dumps(trace[-TRACE_MAX:]))
 
 
 def trace_bar(request: Request | None) -> str:
