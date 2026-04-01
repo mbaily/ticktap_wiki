@@ -1571,11 +1571,9 @@ async def settings_post(request: Request, home_page: str = Form(""), journal_for
         except ValueError:
             return _err("Invalid home page name — use only letters, digits, hyphens, underscores and "
                         "<code>:</code> for namespaces.")
-        _set_user_setting(username, "home_page", home_page)
-    else:
-        _set_user_setting(username, "home_page", "")
 
     journal_format = journal_format.strip()
+    new_journal: str | None = None
     if journal_format:
         # Validate by rendering with a fixed date and checking each resulting path segment
         try:
@@ -1589,9 +1587,11 @@ async def settings_post(request: Request, home_page: str = Form(""), journal_for
         except ValueError:
             return _err("Invalid journal format — the resulting page name contains invalid characters. "
                         "Only letters, digits, hyphens, underscores and <code>:</code> (namespace separators) are allowed.")
-        _set_user_setting(username, "journal_format", journal_format)
-    else:
-        _set_user_setting(username, "journal_format", "")
+        new_journal = journal_format
+
+    # All validation passed — persist both settings together
+    _set_user_setting(username, "home_page", home_page)
+    _set_user_setting(username, "journal_format", new_journal if new_journal is not None else "")
 
     return RedirectResponse("/settings?saved=1", status_code=303)
 
