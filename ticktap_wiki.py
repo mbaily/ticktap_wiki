@@ -1296,9 +1296,14 @@ def _htpasswd_set(username: str, password: str, htfile: Path):
                     continue  # overwrite below
             lines.append(line)
     lines.append(f"{username}:{hashed}")
-    tmp = htfile.parent / (htfile.name + ".tmp")
-    tmp.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    tmp.replace(htfile)
+    tmp = htfile.parent / f"{htfile.name}.{secrets.token_hex(4)}.tmp"
+    try:
+        tmp.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        tmp.chmod(0o600)
+        tmp.replace(htfile)
+        htfile.chmod(0o600)
+    finally:
+        tmp.unlink(missing_ok=True)
 
 # ---- FastAPI dependency ----
 
@@ -1354,7 +1359,7 @@ def my_page(request: Request, _auth: None = Depends(require_auth)):
     username = request.state.username
     if not username:
         return RedirectResponse("/wiki/Home", status_code=303)
-    return RedirectResponse(f"/wiki/{USER_PAGE_NS}/{quote(username, safe='')}/{USER_HOME_PAGE}", status_code=303)
+    return RedirectResponse(f"/wiki/{USER_PAGE_NS}/{quote(username, safe='')}/{quote(USER_HOME_PAGE, safe='')}", status_code=303)
 
 
 @app.get("/wiki/{name:path}", response_class=HTMLResponse)
@@ -2044,6 +2049,7 @@ async def rename_post(request: Request, name: str, new_name: str = Form(""), _au
         old_path = page_path(name)
     except ValueError:
         return HTMLResponse("Invalid page name", 400)
+    _check_page_reader(request, name)
     _check_page_owner(request, name)
     if not old_path.exists():
         return HTMLResponse("Page not found", 404)
@@ -2402,7 +2408,10 @@ async def _do_upload(ns: str, files: list[UploadFile], request: Request | None =
 def upload_get_root(request: Request, pos: int = -1, _auth: None = Depends(require_auth)): return _upload_page("", None, request, pos)
 
 @app.get("/upload/{ns:path}", response_class=HTMLResponse)
-def upload_get(request: Request, ns: str, pos: int = -1, _auth: None = Depends(require_auth)): return _upload_page(ns, None, request, pos)
+def upload_get(request: Request, ns: str, pos: int = -1, _auth: None = Depends(require_auth)):
+    if ns:
+        _check_file_ns_owner(request, normalize_name(ns))
+    return _upload_page(ns, None, request, pos)
 
 @app.post("/upload", response_class=HTMLResponse)
 async def upload_post_root(request: Request, pos: int = -1, files: list[UploadFile] = File(default=[]), _auth: None = Depends(require_auth)):
@@ -2640,6 +2649,7 @@ def history(request: Request, name: str, snap: str = "", view: str = "", _auth: 
 @app.post("/restore/{name:path}", response_class=HTMLResponse)
 async def restore_snapshot(request: Request, name: str, snap: str = Form(""), _auth: None = Depends(require_auth)):
     name = normalize_name(name)
+    _check_page_reader(request, name)
     _check_page_owner(request, name)
     if not VERSIONING_ENABLED:
         return HTMLResponse("Versioning is disabled", 400)
