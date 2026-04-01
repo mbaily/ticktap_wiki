@@ -1039,7 +1039,7 @@ def nav_bar(search_q: str = "", username: str = "") -> str:
                      if username else "")
     logout = (f' <a href="/logout" style="margin-left:auto;font-size:.85rem;color:#ecf0f1">'
               f'&#128274; logout ({html.escape(username)})</a>') if username else ""
-    return (f'<nav><a href="/wiki/Home"><strong>&#128366; {html.escape(SITE_TITLE)}</strong></a>'
+    return (f'<nav><a href="/"><strong>&#128366; {html.escape(SITE_TITLE)}</strong></a>'
             f'<a href="/sitemap">Site Map</a><a href="/new">+ New Page</a>'
             f'<a href="/today">&#128197; Today</a>'
             f'<a href="/tags">&#127991; Tags</a>'
@@ -1416,7 +1416,7 @@ def my_page(request: Request, _auth: None = Depends(require_auth)):
 def settings_get(request: Request, saved: str = "", _auth: None = Depends(require_auth)):
     username = getattr(request.state, "username", "") or ""
     if not username:
-        return RedirectResponse("/login", status_code=303)
+        return RedirectResponse("/wiki/Home", status_code=303)
     # Build default home page suggestion
     if USER_PAGE_NS and re.fullmatch(r"[A-Za-z0-9_\-]+", username):
         default_home = f"{USER_PAGE_NS.replace('/', ':')}:{username}:{USER_HOME_PAGE}"
@@ -1455,7 +1455,7 @@ def settings_get(request: Request, saved: str = "", _auth: None = Depends(requir
 async def settings_post(request: Request, home_page: str = Form(""), _auth: None = Depends(require_auth)):
     username = getattr(request.state, "username", "") or ""
     if not username:
-        return RedirectResponse("/login", status_code=303)
+        return RedirectResponse("/wiki/Home", status_code=303)
     home_page = home_page.strip()
     if home_page:
         # Validate: convert colon form to slash, then check each segment
@@ -1472,7 +1472,7 @@ async def settings_post(request: Request, home_page: str = Form(""), _auth: None
                 f'<p><a href="/settings">&larr; Back</a></p>'
                 f'</div></div>'
             )
-            return HTMLResponse(body, status_code=400)
+            return HTMLResponse(shell("Settings", body, request=request), status_code=400)
         _set_user_setting(username, "home_page", home_page)
     else:
         _set_user_setting(username, "home_page", "")
