@@ -1064,7 +1064,7 @@ def nav_bar(search_q: str = "", username: str = "") -> str:
     def _lnk(key: str, href: str, icon: str, label: str) -> str:
         """Return a nav <a> that is icon-only (with title tooltip) or icon+label."""
         if key in NAV_ICON_ONLY:
-            return f'<a href="{href}" title="{label}">{icon}</a>'
+            return f'<a href="{href}" title="{html.escape(label)}">{icon}</a>'
         return f'<a href="{href}">{icon} {label}</a>'
 
     my_page_link = (
