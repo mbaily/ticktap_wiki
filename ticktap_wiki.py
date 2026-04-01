@@ -26,6 +26,11 @@ HTTPS_ENABLED     = True          # set True to enable TLS
 TLS_CERT_FILE     = "cert.pem"
 TLS_KEY_FILE      = "key.pem"
 
+# Set to the IP(s) of your reverse proxy (nginx, Caddy, etc.) so the rate-limiter
+# uses the real client IP from X-Forwarded-For rather than 127.0.0.1.
+# Example: TRUSTED_PROXY = {"127.0.0.1", "::1"}
+TRUSTED_PROXY: set[str] = set()
+
 DARK_MODE         = True         # set True to use dark colour scheme
 SITE_TITLE        = "TickTap Wiki"        # site-wide title shown in nav bar, page titles, and login page
 
@@ -1365,7 +1370,6 @@ def _issue_token(username: str) -> str:
         }
         _save_tokens(tokens)
     return token
-    return token
 
 def _validate_token(token: str) -> str | None:
     """Return username if token is valid, else None."""
@@ -1383,9 +1387,10 @@ def _validate_token(token: str) -> str | None:
         return None
 
 def _revoke_token(token: str):
-    tokens = _load_tokens()
-    tokens.pop(token, None)
-    _save_tokens(tokens)
+    with _token_lock:
+        tokens = _load_tokens()
+        tokens.pop(token, None)
+        _save_tokens(tokens)
 
 def _get_token(request: Request) -> str:
     """Extract token from cookie, then query param, then Authorization header."""
@@ -1403,6 +1408,17 @@ def _get_token(request: Request) -> str:
 _fail_log: dict[str, list[float]] = {}  # ip -> [timestamp, ...]
 _FAIL_WINDOW = 60      # seconds
 _FAIL_MAX    = 5       # attempts before lockout
+
+def _real_ip(request: Request) -> str:
+    """Return the real client IP, honouring X-Forwarded-For when the connection
+    comes from a trusted proxy address (TRUSTED_PROXY config set)."""
+    peer = request.client.host if request.client else "unknown"
+    if TRUSTED_PROXY and peer in TRUSTED_PROXY:
+        xff = request.headers.get("x-forwarded-for", "").split(",")
+        candidate = xff[0].strip()
+        if candidate:
+            return candidate
+    return peer
 
 def _check_rate(ip: str) -> bool:
     """Return True if the IP is allowed to attempt login, False if locked out."""
@@ -1931,7 +1947,15 @@ async def edit_section_post(request: Request, name: str, idx: int, content: str 
     sections = find_editable_sections(src, SECTION_EDIT_MIN, SECTION_EDIT_MAX)
     if idx >= len(sections):
         return HTMLResponse("Section not found", 400)
-    _level, start_line, end_line = sections[idx]
+    # Prefer locating the section by its heading anchor (more robust under concurrent edits).
+    # Fall back to idx if the anchor is absent or doesn't match any section.
+    target_idx = idx
+    if anchor:
+        for i, (_, sl, _el) in enumerate(sections):
+            if _compute_anchor_for_line(src, sl) == anchor:
+                target_idx = i
+                break
+    _level, start_line, end_line = sections[target_idx]
     src_lines = src.split("\n")
     new_content = content.replace("\r\n", "\n").replace("\r", "\n")
     src_lines[start_line:end_line] = new_content.split("\n")
@@ -2607,7 +2631,7 @@ def login_get(next: str = "/wiki/Home"):
 
 @app.post("/login", response_class=HTMLResponse)
 async def login_post(request: Request, username: str = Form(""), password: str = Form(""), next: str = Form("/wiki/Home")):
-    ip = request.client.host if request.client else "unknown"
+    ip = _real_ip(request)
     if not _check_rate(ip):
         return HTMLResponse("Too many login attempts. Wait 60 seconds.", status_code=429)
     if not username or not password:
