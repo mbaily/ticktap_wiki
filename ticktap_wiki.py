@@ -1,4 +1,4 @@
-import os, re, html, time, secrets, json, math, shutil, hashlib, base64, logging, sqlite3
+import os, re, html, time, secrets, json, math, shutil, hashlib, base64, logging, sqlite3, threading
 from urllib.parse import quote
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
@@ -545,8 +545,14 @@ def parse(src: str, name: str = "", section_edit: bool = True) -> tuple[str, lis
             level, text = 7 - len(hm.group(1)), hm.group(2)
             base_anchor = slug(text)
             if base_anchor in seen_anchors:
-                seen_anchors[base_anchor] += 1
-                anchor = f"{base_anchor}-{seen_anchors[base_anchor]}"
+                # Find a suffix that doesn't collide with any other heading slug
+                while True:
+                    seen_anchors[base_anchor] += 1
+                    candidate = f"{base_anchor}-{seen_anchors[base_anchor]}"
+                    if candidate not in seen_anchors:
+                        break
+                anchor = candidate
+                seen_anchors[anchor] = 1
             else:
                 seen_anchors[base_anchor] = 1
                 anchor = base_anchor
@@ -698,8 +704,13 @@ def _compute_anchor_for_line(src: str, target_line: int) -> str:
         if hm:
             base_anchor = slug(hm.group(2))
             if base_anchor in seen_anchors:
-                seen_anchors[base_anchor] += 1
-                anchor = f"{base_anchor}-{seen_anchors[base_anchor]}"
+                while True:
+                    seen_anchors[base_anchor] += 1
+                    candidate = f"{base_anchor}-{seen_anchors[base_anchor]}"
+                    if candidate not in seen_anchors:
+                        break
+                anchor = candidate
+                seen_anchors[anchor] = 1
             else:
                 seen_anchors[base_anchor] = 1
                 anchor = base_anchor
@@ -1333,23 +1344,27 @@ def _save_tokens(tokens: dict):
     finally:
         tmp.unlink(missing_ok=True)
 
+_token_lock = threading.Lock()
+
 def _issue_token(username: str) -> str:
     token = secrets.token_hex(32)
-    tokens = _load_tokens()
-    # prune expired — skip any malformed entries rather than crashing
     now = _now()
     def _is_valid_unexpired(v: object) -> bool:
         try:
             return isinstance(v, dict) and datetime.fromisoformat(v["expires"]) > now
         except (KeyError, ValueError, TypeError):
             return False
-    tokens = {k: v for k, v in tokens.items() if _is_valid_unexpired(v)}
-    tokens[token] = {
-        "user": username,
-        "issued": now.isoformat(),
-        "expires": (now + timedelta(days=TOKEN_EXPIRY_DAYS)).isoformat(),
-    }
-    _save_tokens(tokens)
+    with _token_lock:
+        tokens = _load_tokens()
+        # prune expired — skip any malformed entries rather than crashing
+        tokens = {k: v for k, v in tokens.items() if _is_valid_unexpired(v)}
+        tokens[token] = {
+            "user": username,
+            "issued": now.isoformat(),
+            "expires": (now + timedelta(days=TOKEN_EXPIRY_DAYS)).isoformat(),
+        }
+        _save_tokens(tokens)
+    return token
     return token
 
 def _validate_token(token: str) -> str | None:
@@ -1410,7 +1425,8 @@ def _check_password(username: str, password: str) -> bool:
         return False
     # Dummy hash used for constant-time comparison when username is not found,
     # preventing timing-based username enumeration.
-    _DUMMY = b"$2b$12$aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    # Must be exactly 60 bytes — a valid bcrypt hash length.
+    _DUMMY = b"$2b$12$aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
     try:
         lines = HTPASSWD_FILE.read_text(encoding="utf-8").splitlines()
     except OSError:
@@ -3168,7 +3184,7 @@ async def reorder_todos(name: str, request: Request, _auth: None = Depends(requi
     except Exception:
         return JSONResponse({"ok": False, "error": "Invalid JSON"}, status_code=400)
     order = body.get("order", [])
-    if not isinstance(order, list) or not all(isinstance(x, int) for x in order):
+    if not isinstance(order, list) or not all(isinstance(x, int) and not isinstance(x, bool) for x in order):
         return JSONResponse({"ok": False, "error": "Bad request"}, status_code=400)
     if len(order) > 500 or len(set(order)) != len(order):
         return JSONResponse({"ok": False, "error": "Bad request"}, status_code=400)
