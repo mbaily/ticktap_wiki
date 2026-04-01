@@ -1,4 +1,4 @@
-import os, re, html, time, secrets, json, math, shutil, hashlib, base64, logging, dbm
+import os, re, html, time, secrets, json, math, shutil, hashlib, base64, logging, sqlite3
 from urllib.parse import quote
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
@@ -99,35 +99,60 @@ USER_PAGE_AUTOCREATE = True    # write a stub on first login if the page doesn't
 USER_PAGE_PRIVATE    = True   # True → only the owner may edit their own user page
 USER_PAGE_HIDDEN     = True   # True → only the owner may read/view their own user pages and files
 USER_HOME_PAGE       = "Home"  # page name for the user's landing page within their sub-namespace
-USER_SETTINGS_FILE   = Path(__file__).parent / ".wiki_user_settings"  # dbm file for per-user preferences
+USER_SETTINGS_FILE   = Path(__file__).parent / "wiki_user_settings.sqlite3"  # SQLite file for per-user preferences
 
 app = FastAPI()
 
 # ── user settings helpers ─────────────────────────────────────────────────────
 
+def _get_db() -> sqlite3.Connection:
+    """Open (and initialise if needed) the user-settings SQLite database."""
+    con = sqlite3.connect(str(USER_SETTINGS_FILE), check_same_thread=False)
+    con.execute(
+        "CREATE TABLE IF NOT EXISTS user_settings "
+        "(username TEXT NOT NULL, key TEXT NOT NULL, value TEXT NOT NULL, "
+        "PRIMARY KEY (username, key))"
+    )
+    con.commit()
+    return con
+
+
 def _get_user_setting(username: str, key: str, default: str = "") -> str:
-    """Return a per-user setting value from the dbm store."""
+    """Return a per-user setting value from the SQLite store."""
     if not username:
         return default
     try:
-        with dbm.open(str(USER_SETTINGS_FILE), "c") as db:
-            raw = db.get(f"{username}:{key}")
-            if raw is None:
-                return default
-            return raw.decode() if isinstance(raw, (bytes, bytearray)) else raw
+        con = _get_db()
+        row = con.execute(
+            "SELECT value FROM user_settings WHERE username=? AND key=?",
+            (username, key),
+        ).fetchone()
+        con.close()
+        return row[0] if row else default
     except Exception:
         return default
+
+
+def _set_user_settings(username: str, pairs: dict[str, str]) -> None:
+    """Persist multiple per-user settings atomically in the SQLite store."""
+    if not username or not pairs:
+        return
+    try:
+        con = _get_db()
+        con.executemany(
+            "INSERT INTO user_settings (username, key, value) VALUES (?,?,?) "
+            "ON CONFLICT(username, key) DO UPDATE SET value=excluded.value",
+            [(username, k, v) for k, v in pairs.items()],
+        )
+        con.commit()
+        con.close()
+    except Exception:
+        pass
 
 
 def _set_user_setting(username: str, key: str, value: str) -> None:
-    """Persist a per-user setting value in the dbm store."""
-    if not username:
-        return
-    try:
-        with dbm.open(str(USER_SETTINGS_FILE), "c") as db:
-            db[f"{username}:{key}"] = value
-    except Exception:
-        pass
+    """Persist a single per-user setting value in the SQLite store."""
+    _set_user_settings(username, {key: value})
 
 
 def _apply_journal_format(fmt: str, now: datetime) -> str:
@@ -1096,18 +1121,35 @@ def nav_bar(search_q: str = "", username: str = "") -> str:
 
 
 def _get_pins(request: Request | None) -> list[str]:
-    """Return the validated list of pinned page names from the wiki_pins cookie."""
+    """Return the validated list of pinned page names.
+
+    For authenticated users pins are stored in the dbm (server-side, per-user).
+    For non-auth mode the legacy browser cookie is used as a fallback.
+    """
     if request is None:
         return []
-    raw = request.cookies.get("wiki_pins", "")
-    if not raw:
-        return []
-    try:
-        pins = json.loads(raw)
-        if not isinstance(pins, list):
+    username = getattr(request.state, "username", "") or ""
+    if username:
+        raw = _get_user_setting(username, "pins")
+        if not raw:
             return []
-    except Exception:
-        return []
+        try:
+            pins = json.loads(raw)
+            if not isinstance(pins, list):
+                return []
+        except Exception:
+            return []
+    else:
+        # Non-auth fallback: read from cookie
+        raw = request.cookies.get("wiki_pins", "")
+        if not raw:
+            return []
+        try:
+            pins = json.loads(raw)
+            if not isinstance(pins, list):
+                return []
+        except Exception:
+            return []
     valid = []
     for p in pins[:20]:
         if not isinstance(p, str):
@@ -1121,12 +1163,20 @@ def _get_pins(request: Request | None) -> list[str]:
     return valid
 
 
+def _save_pins(username: str, response, pins: list[str]) -> None:
+    """Persist pin list: dbm for authenticated users, cookie fallback otherwise."""
+    if username:
+        _set_user_setting(username, "pins", json.dumps(pins))
+    else:
+        _set_pins_cookie(response, pins)
+
+
 def _set_pins_cookie(response, pins: list[str]):
+    """Write pins to browser cookie (non-auth fallback only)."""
     response.set_cookie("wiki_pins", json.dumps(pins), max_age=365 * 86400,
                         httponly=True, samesite="strict", secure=HTTPS_ENABLED, path="/")
 
 
-def pins_bar(request: Request | None) -> str:
     pins = _get_pins(request)
     if USER_PAGE_HIDDEN and USER_PAGE_NS:
         requester = (getattr(request.state, "username", "") or "") if request is not None else ""
@@ -1619,9 +1669,11 @@ async def settings_post(request: Request, home_page: str = Form(""), journal_for
                         "Only letters, digits, hyphens, underscores and <code>:</code> (namespace separators) are allowed.")
         new_journal = journal_format
 
-    # All validation passed — persist both settings together
-    _set_user_setting(username, "home_page", home_page)
-    _set_user_setting(username, "journal_format", new_journal if new_journal is not None else "")
+    # All validation passed — persist both settings atomically
+    _set_user_settings(username, {
+        "home_page": home_page,
+        "journal_format": new_journal if new_journal is not None else "",
+    })
 
     return RedirectResponse("/settings?saved=1", status_code=303)
 
@@ -2973,6 +3025,7 @@ async def pin_toggle(name: str, request: Request, _auth: None = Depends(require_
         page_path(name)
     except ValueError:
         return HTMLResponse("Invalid page name", 400)
+    username = getattr(request.state, "username", "") or ""
     pins = _get_pins(request)
     if name in pins:
         pins = [p for p in pins if p != name]
@@ -2980,7 +3033,7 @@ async def pin_toggle(name: str, request: Request, _auth: None = Depends(require_
         pins = [p for p in pins if p != name][:19]
         pins.append(name)
     resp = RedirectResponse(f"/wiki/{name}", status_code=303)
-    _set_pins_cookie(resp, pins)
+    _save_pins(username, resp, pins)
     return resp
 
 
