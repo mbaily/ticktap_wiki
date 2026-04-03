@@ -482,30 +482,43 @@ def _expand_date_macros(text: str) -> str:
     return re.sub(r"\{\{(date(?::[^}]*)?|datetime)\}\}", _replace, text)
 
 
-def _pageindex_ul(d: Path, prefix: str, deep: bool) -> str:
-    """Build one ``<ul>`` level for ``_render_pageindex``.
+def _pageindex_collect(d: Path, prefix: str) -> list[tuple[str, str]]:
+    """Recursively collect all wiki pages under *d* as ``(pname, mtime)`` tuples.
 
-    In *deep* mode each sub-namespace entry gets a nested ``<ul>`` of its
-    own contents rather than being a plain folder link.  Page labels always
-    show the stem only; the namespace hierarchy is conveyed visually by the
-    nested list structure.
-
-    Returns an empty string when the directory contains no eligible items,
-    so callers can decide whether to emit a ``<ul>`` at all.
+    Only descends into directories whose names match ``[A-Za-z0-9_-]+``.
+    Pages whose filename starts with ``_`` are excluded.
+    Results are returned in filesystem order (sorted by name at each level);
+    callers may re-sort as needed.
     """
-    items = []
+    results: list[tuple[str, str]] = []
     for child in sorted(d.iterdir()):
         if child.is_dir() and re.fullmatch(r"[A-Za-z0-9_\-]+", child.name):
             rel = f"{prefix}/{child.name}" if prefix else child.name
-            if deep:
-                sub = _pageindex_ul(child, rel, deep)
-                items.append(
-                    f'<li>&#128193; <a href="/ns/{html.escape(rel)}">{html.escape(child.name)}/</a>'
-                    + (sub if sub else "")
-                    + "</li>"
-                )
-            else:
-                items.append(f'<li>&#128193; <a href="/ns/{html.escape(rel)}">{html.escape(child.name)}/</a></li>')
+            results.extend(_pageindex_collect(child, rel))
+        elif child.suffix == ".wiki" and not child.name.startswith("_"):
+            pname = f"{prefix}/{child.stem}" if prefix else child.stem
+            try:
+                mtime = time.strftime("%Y-%m-%d", time.localtime(child.stat().st_mtime))
+            except OSError:
+                mtime = ""
+            results.append((pname, mtime))
+    return results
+
+
+def _pageindex_ul(d: Path, prefix: str, desc: bool) -> str:
+    """Build a shallow ``<ul>`` for ``_render_pageindex`` (flat/non-deep mode).
+
+    Lists immediate children of *d*: sub-namespaces as folder links followed
+    by wiki pages.  Pass ``desc=True`` to reverse the sort order.
+
+    Returns an empty string when there are no eligible items.
+    """
+    items = []
+    children = sorted(d.iterdir(), reverse=desc)
+    for child in children:
+        if child.is_dir() and re.fullmatch(r"[A-Za-z0-9_\-]+", child.name):
+            rel = f"{prefix}/{child.name}" if prefix else child.name
+            items.append(f'<li>&#128193; <a href="/ns/{html.escape(rel)}">{html.escape(child.name)}/</a></li>')
         elif child.suffix == ".wiki" and not child.name.startswith("_"):
             pname = f"{prefix}/{child.stem}" if prefix else child.stem
             try:
@@ -520,6 +533,61 @@ def _pageindex_ul(d: Path, prefix: str, deep: bool) -> str:
     if not items:
         return ""
     return '<ul style="list-style:none;padding-left:0">' + "".join(items) + "</ul>"
+
+
+def _render_pageindex(ns_key: str, deep: bool = False, desc: bool = False) -> str:
+    """Return an HTML ``<ul>`` listing pages (and sub-namespaces) for *ns_key*.
+
+    Args:
+        ns_key: Namespace path using ``/`` separators (e.g. ``"projects/sub"``).
+                Pass ``""`` for the wiki root.
+        deep:   When ``True``, recurse into all sub-namespaces and produce a
+                single flat list.  Each page label shows its full path relative
+                to *ns_key* (e.g. ``journal/2026-04-04``) so the namespace
+                hierarchy is visible in the labels.  No folder icons are shown.
+                When ``False`` (default), only immediate children are listed and
+                sub-namespaces appear as folder links.
+        desc:   When ``True``, reverse the sort order (Z→A / newest first).
+                Default is ascending (A→Z).
+
+    Returns:
+        HTML ``<ul>…</ul>`` string, or a short error paragraph if the namespace
+        directory is invalid or does not exist.
+    """
+    parts = [p for p in ns_key.split("/") if p]
+    for p in parts:
+        if not re.fullmatch(r"[A-Za-z0-9_\-]+", p):
+            return f'<p><em>Invalid namespace: <code>{html.escape(ns_key)}</code></em></p>'
+    target_dir = PAGES_DIR.joinpath(*parts) if parts else PAGES_DIR
+    try:
+        if not target_dir.resolve().is_relative_to(PAGES_DIR.resolve()):
+            return f'<p><em>Invalid namespace: <code>{html.escape(ns_key)}</code></em></p>'
+    except OSError:
+        return f'<p><em>Invalid namespace: <code>{html.escape(ns_key)}</code></em></p>'
+    if not target_dir.is_dir():
+        return f'<p><em>No pages found in namespace <code>{html.escape(ns_key or "root")}</code>.</em></p>'
+    prefix = "/".join(parts)
+
+    if deep:
+        pages = _pageindex_collect(target_dir, prefix)
+        pages.sort(key=lambda t: t[0], reverse=desc)
+        if not pages:
+            return f'<p><em>No pages in namespace <code>{html.escape(ns_key or "root")}</code>.</em></p>'
+        items = []
+        for pname, mtime in pages:
+            # Label: path relative to the index root (strip the ns_key prefix)
+            rel_label = pname[len(prefix) + 1:] if prefix and pname.startswith(prefix + "/") else pname
+            items.append(
+                f'<li>&#128196; <a href="/wiki/{html.escape(pname)}">{html.escape(rel_label)}</a>'
+                + (f' <small style="color:#888">{mtime}</small>' if mtime else "")
+                + "</li>"
+            )
+        return '<ul style="list-style:none;padding-left:0">' + "".join(items) + "</ul>"
+
+    result = _pageindex_ul(target_dir, prefix, desc)
+    if not result:
+        return f'<p><em>No pages in namespace <code>{html.escape(ns_key or "root")}</code>.</em></p>'
+    return result
 
 
 def _resolve_relative_ns(target: str, cur_ns: str) -> str:
@@ -553,37 +621,6 @@ def _resolve_relative_ns(target: str, cur_ns: str) -> str:
     return (base + "/" + remaining).strip("/") if base else remaining
 
 
-def _render_pageindex(ns_key: str, deep: bool = False) -> str:
-    """Return an HTML ``<ul>`` listing pages and sub-namespaces for *ns_key*.
-
-    Args:
-        ns_key: Namespace path using ``/`` separators (e.g. ``"projects/sub"``).
-                Pass ``""`` for the wiki root.
-        deep:   When ``True`` sub-namespaces are expanded recursively into
-                nested ``<ul>`` trees.  When ``False`` (default) only the
-                immediate children are listed.
-
-    Returns:
-        HTML ``<ul>…</ul>`` string, or a short error paragraph if the namespace
-        directory is invalid or does not exist.
-    """
-    parts = [p for p in ns_key.split("/") if p]
-    for p in parts:
-        if not re.fullmatch(r"[A-Za-z0-9_\-]+", p):
-            return f'<p><em>Invalid namespace: <code>{html.escape(ns_key)}</code></em></p>'
-    target_dir = PAGES_DIR.joinpath(*parts) if parts else PAGES_DIR
-    # Safety: reject paths that escape PAGES_DIR
-    try:
-        if not target_dir.resolve().is_relative_to(PAGES_DIR.resolve()):
-            return f'<p><em>Invalid namespace: <code>{html.escape(ns_key)}</code></em></p>'
-    except OSError:
-        return f'<p><em>Invalid namespace: <code>{html.escape(ns_key)}</code></em></p>'
-    if not target_dir.is_dir():
-        return f'<p><em>No pages found in namespace <code>{html.escape(ns_key or "root")}</code>.</em></p>'
-    prefix = "/".join(parts)
-    result = _pageindex_ul(target_dir, prefix, deep)
-    if not result:
-        return f'<p><em>No pages in namespace <code>{html.escape(ns_key or "root")}</code>.</em></p>'
     return result
 
 # ── markup parser ──────────────────────────────────────────────────────────────
@@ -969,13 +1006,15 @@ def parse(src: str, name: str = "", section_edit: bool = True) -> tuple[str, lis
             out.append(f'<li data-line="{i + meta_offset}" data-indent="{li_indent}" data-prefix="{li_prefix}">{text}{del_btn}</li>')
             continue
 
-        # block macros — whole-line {{pageindex}}, {{pageindex:ns}}, {{pageindex|deep}}, {{pageindex:ns|deep}}
-        bm = re.fullmatch(r"\{\{pageindex(?::([A-Za-z0-9/_:\-]*))?(?:\|(deep))?\}\}", line.strip())
+        # block macros — whole-line {{pageindex}}, {{pageindex:ns}}, with optional |deep and/or |desc flags
+        bm = re.fullmatch(r"\{\{pageindex(?::([A-Za-z0-9/_:\-]*))?(?:\|([a-z|]*))?\}\}", line.strip())
         if bm:
             flush_para(); close_table(); close_lists()
             raw_ns = (bm.group(1) or "").replace(":", "/").strip("/")
-            deep = bm.group(2) == "deep"
-            out.append(_render_pageindex(raw_ns or cur_ns, deep=deep))
+            flags = set((bm.group(2) or "").split("|"))
+            deep = "deep" in flags
+            desc = "desc" in flags
+            out.append(_render_pageindex(raw_ns or cur_ns, deep=deep, desc=desc))
             continue
 
         close_table()
