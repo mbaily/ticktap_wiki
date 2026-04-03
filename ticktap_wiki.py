@@ -669,6 +669,14 @@ def parse_inline(text: str, cur_ns: str = "") -> str:
         return f"\x01{len(code_stash)-1}\x01"
     text = re.sub(r"`([^`\n]+)`", stash_code, text)
 
+    # Step 1b: Stash %%nowiki%% spans — rendered as plain escaped text, no
+    # macro expansion or markup processing.  Uses \x02 as placeholder.
+    nowiki_stash: list[str] = []
+    def stash_nowiki(m: re.Match) -> str:
+        nowiki_stash.append(m.group(1))
+        return f"\x02{len(nowiki_stash)-1}\x02"
+    text = re.sub(r"%%(.+?)%%", stash_nowiki, text, flags=re.DOTALL)
+
     # Step 2: Expand date macros so they work inside [[link targets]] and labels.
     # Inline code spans are already stashed so their contents survive unexpanded.
     text = _expand_date_macros(text)
@@ -766,7 +774,12 @@ def parse_inline(text: str, cur_ns: str = "") -> str:
     # (the surrounding text was already escaped in the html.escape() call above).
     def restore_code(m: re.Match) -> str:
         return f"<code>{html.escape(code_stash[int(m.group(1))])}</code>"
-    return re.sub(r"\x01(\d+)\x01", restore_code, text)
+    text = re.sub(r"\x01(\d+)\x01", restore_code, text)
+
+    # Step 7: Restore %%nowiki%% spans as plain escaped text.
+    def restore_nowiki(m: re.Match) -> str:
+        return html.escape(nowiki_stash[int(m.group(1))])
+    return re.sub(r"\x02(\d+)\x02", restore_nowiki, text)
 
 
 def _parse_table_row(line: str) -> list | None:
