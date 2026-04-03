@@ -458,6 +458,75 @@ def slug(text: str) -> str:
     s = re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
     return s or "heading"
 
+# ── markup macros ─────────────────────────────────────────────────────────────
+
+def _expand_date_macros(text: str) -> str:
+    """Expand {{date}}, {{datetime}}, and {{date:fmt}} macros to plain text.
+
+    Called after inline-code spans have already been stashed in parse_inline,
+    so macros inside backtick code are never expanded.
+    """
+    tz = ZoneInfo(DISPLAY_TIMEZONE)
+    now = datetime.now(tz)
+
+    def _replace(m: re.Match) -> str:
+        token = m.group(1)
+        if token == "datetime":
+            return now.strftime("%Y-%m-%d %H:%M")
+        elif token.startswith("date:"):
+            fmt = token[5:].strip() or "%Y-%m-%d"
+            return now.strftime(fmt)
+        else:  # bare "date"
+            return now.strftime("%Y-%m-%d")
+
+    return re.sub(r"\{\{(date(?::[^}]*)?|datetime)\}\}", _replace, text)
+
+
+def _render_pageindex(ns_key: str) -> str:
+    """Return an HTML ``<ul>`` listing pages and sub-namespaces for *ns_key*.
+
+    Args:
+        ns_key: Namespace path using ``/`` separators (e.g. ``"projects/sub"``).
+                Pass ``""`` for the wiki root.
+
+    Returns:
+        HTML ``<ul>…</ul>`` string, or a short error paragraph if the namespace
+        directory is invalid or does not exist.
+    """
+    parts = [p for p in ns_key.split("/") if p]
+    for p in parts:
+        if not re.fullmatch(r"[A-Za-z0-9_\-]+", p):
+            return f'<p><em>Invalid namespace: <code>{html.escape(ns_key)}</code></em></p>'
+    target_dir = PAGES_DIR.joinpath(*parts) if parts else PAGES_DIR
+    # Safety: reject paths that escape PAGES_DIR
+    try:
+        if not target_dir.resolve().is_relative_to(PAGES_DIR.resolve()):
+            return f'<p><em>Invalid namespace: <code>{html.escape(ns_key)}</code></em></p>'
+    except OSError:
+        return f'<p><em>Invalid namespace: <code>{html.escape(ns_key)}</code></em></p>'
+    if not target_dir.is_dir():
+        return f'<p><em>No pages found in namespace <code>{html.escape(ns_key or "root")}</code>.</em></p>'
+    prefix = "/".join(parts)
+    items = []
+    for child in sorted(target_dir.iterdir()):
+        if child.is_dir() and re.fullmatch(r"[A-Za-z0-9_\-]+", child.name):
+            rel = f"{prefix}/{child.name}" if prefix else child.name
+            items.append(f'<li>&#128193; <a href="/ns/{html.escape(rel)}">{html.escape(child.name)}/</a></li>')
+        elif child.suffix == ".wiki" and not child.name.startswith("_"):
+            pname = f"{prefix}/{child.stem}" if prefix else child.stem
+            try:
+                mtime = time.strftime("%Y-%m-%d", time.localtime(child.stat().st_mtime))
+            except OSError:
+                mtime = ""
+            items.append(
+                f'<li>&#128196; <a href="/wiki/{html.escape(pname)}">{html.escape(child.stem)}</a>'
+                + (f' <small style="color:#888">{mtime}</small>' if mtime else "")
+                + '</li>'
+            )
+    if not items:
+        return f'<p><em>No pages in namespace <code>{html.escape(ns_key or "root")}</code>.</em></p>'
+    return '<ul style="list-style:none;padding-left:0">' + "".join(items) + "</ul>"
+
 # ── markup parser ──────────────────────────────────────────────────────────────
 
 def parse_inline(text: str, cur_ns: str = "") -> str:
@@ -494,7 +563,22 @@ def parse_inline(text: str, cur_ns: str = "") -> str:
     Returns:
         HTML string ready for insertion into the page body.
     """
-    # Stash [[links]] and {{media}} as null-byte placeholders so inline
+    # Step 1: Stash `inline code` spans first so their contents are never
+    # processed by date expansion, HTML escaping, or formatting patterns.
+    # Inner text (without backticks) is captured; restored as <code>...</code>
+    # at the very end after html-escaping.  Uses \x01 as placeholder, which is
+    # distinct from the \x00 placeholder used by the link/media stash below.
+    code_stash: list[str] = []
+    def stash_code(m: re.Match) -> str:
+        code_stash.append(m.group(1))
+        return f"\x01{len(code_stash)-1}\x01"
+    text = re.sub(r"`([^`\n]+)`", stash_code, text)
+
+    # Step 2: Expand date macros so they work inside [[link targets]] and labels.
+    # Inline code spans are already stashed so their contents survive unexpanded.
+    text = _expand_date_macros(text)
+
+    # Step 3: Stash [[links]] and {{media}} as null-byte placeholders so inline
     # patterns (especially //italic//) cannot match across URL double-slashes.
     # Non-greedy is correct: wiki syntax forbids nesting, so the first closing
     # delimiter always ends the token.
@@ -508,7 +592,6 @@ def parse_inline(text: str, cur_ns: str = "") -> str:
     text = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", text)
     text = re.sub(r"//(.+?)//",     r"<em>\1</em>",         text)
     text = re.sub(r"__(.+?)__",     r"<u>\1</u>",           text)
-    text = re.sub(r"`(.+?)`",       r"<code>\1</code>",     text)
     text = re.sub(r"~~(.+?)~~",     r"<s>\1</s>",           text)
 
     def render_media(raw: str) -> str:
@@ -578,7 +661,13 @@ def parse_inline(text: str, cur_ns: str = "") -> str:
         raw = stash[int(m.group(1))]
         return render_media(raw) if raw.startswith("{{") else render_link(raw)
 
-    return re.sub(r"\x00(\d+)\x00", restore, text)
+    text = re.sub(r"\x00(\d+)\x00", restore, text)
+
+    # Step 6: Restore inline code spans. The inner content is html-escaped here
+    # (the surrounding text was already escaped in the html.escape() call above).
+    def restore_code(m: re.Match) -> str:
+        return f"<code>{html.escape(code_stash[int(m.group(1))])}</code>"
+    return re.sub(r"\x01(\d+)\x01", restore_code, text)
 
 
 def _parse_table_row(line: str) -> list | None:
@@ -815,6 +904,14 @@ def parse(src: str, name: str = "", section_edit: bool = True) -> tuple[str, lis
             li_prefix = lm.group(2) + " "
             del_btn = f' <a class="line-del" href="#" data-line="{i + meta_offset}" data-name="{html.escape(name)}">\u274c</a>' if INLINE_DELETE and section_edit and name else ''
             out.append(f'<li data-line="{i + meta_offset}" data-indent="{li_indent}" data-prefix="{li_prefix}">{text}{del_btn}</li>')
+            continue
+
+        # block macros — whole-line {{pageindex}} or {{pageindex:ns}}
+        bm = re.fullmatch(r"\{\{pageindex(?::([A-Za-z0-9/_:\-]*))?\}\}", line.strip())
+        if bm:
+            flush_para(); close_table(); close_lists()
+            raw_ns = (bm.group(1) or "").replace(":", "/").strip("/")
+            out.append(_render_pageindex(raw_ns or cur_ns))
             continue
 
         close_table()

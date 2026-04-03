@@ -279,5 +279,47 @@ The server maps between the two automatically.
 [[file:doc.pdf|label]]
 {{image.png|alt text}}
 
+{{date}}   {{date:%d %b %Y}}   {{datetime}}
+{{pageindex}}   {{pageindex:ns}}
+
 ----     (horizontal rule)
+```
+
+---
+
+## Macros
+
+Macros use the same `{{...}}` double-brace syntax as image embedding, but their targets are reserved keywords rather than file names.
+
+### Date and time
+
+| Macro | Output |
+|-------|--------|
+| `{{date}}` | Today's date in `YYYY-MM-DD` format |
+| `{{date:format}}` | Today's date with a custom [strftime](https://strftime.org/) format string |
+| `{{datetime}}` | Current date and time as `YYYY-MM-DD HH:MM` |
+
+The timezone used is the one configured in `DISPLAY_TIMEZONE` (default: the server's configured timezone).
+
+**Examples:**
+```
+Last updated: {{date}}
+As of {{date:%d %B %Y}} at {{datetime}}
+```
+
+### Page index
+
+Generates an automatic, live index of all pages and sub-namespaces in a given namespace. Must appear on its own line (it is a block-level element).
+
+```
+{{pageindex}}              list pages in the current page's namespace
+{{pageindex:ns}}           list pages in namespace "ns"
+{{pageindex:ns:sub}}       list pages in nested namespace "ns/sub"
+```
+
+Each entry links to the page (`/wiki/…`) or namespace browse view (`/ns/…`).  Pages are sorted alphabetically and show their last-modified date.
+
+**Example** — put this on a `projects/Home` page to auto-list everything in the `projects` namespace:
+```
+{{pageindex:projects}}
 ```
