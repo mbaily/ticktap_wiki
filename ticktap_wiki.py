@@ -622,8 +622,6 @@ def _resolve_relative_ns(target: str, cur_ns: str) -> str:
     return (base + "/" + remaining).strip("/") if base else remaining
 
 
-    return result
-
 # ── markup parser ──────────────────────────────────────────────────────────────
 
 def parse_inline(text: str, cur_ns: str = "") -> str:
