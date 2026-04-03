@@ -553,7 +553,7 @@ def _resolve_relative_ns(target: str, cur_ns: str) -> str:
     return (base + "/" + remaining).strip("/") if base else remaining
 
 
-
+def _render_pageindex(ns_key: str, deep: bool = False) -> str:
     """Return an HTML ``<ul>`` listing pages and sub-namespaces for *ns_key*.
 
     Args:
