@@ -577,6 +577,7 @@ def _render_pageindex(ns_key: str, deep: bool = False, desc: bool = False) -> st
         for pname, mtime in pages:
             # Label: path relative to the index root (strip the ns_key prefix)
             rel_label = pname[len(prefix) + 1:] if prefix and pname.startswith(prefix + "/") else pname
+            rel_label = rel_label.replace("/", ":")
             items.append(
                 f'<li>&#128196; <a href="/wiki/{html.escape(pname)}">{html.escape(rel_label)}</a>'
                 + (f' <small style="color:#888">{mtime}</small>' if mtime else "")
