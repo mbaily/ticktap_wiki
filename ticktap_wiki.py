@@ -522,7 +522,38 @@ def _pageindex_ul(d: Path, prefix: str, deep: bool) -> str:
     return '<ul style="list-style:none;padding-left:0">' + "".join(items) + "</ul>"
 
 
-def _render_pageindex(ns_key: str, deep: bool = False) -> str:
+def _resolve_relative_ns(target: str, cur_ns: str) -> str:
+    """Resolve a DokuWiki relative link target against the current namespace.
+
+    DokuWiki relative syntax uses colon-separated leading dot/double-dot
+    segments to navigate the namespace hierarchy:
+
+    * ``.:sub:Page``   — current namespace + sub-namespace + Page
+    * ``..:Page``      — parent namespace + Page  (one level up)
+    * ``..:..:Page``   — grandparent namespace + Page (two levels up)
+    * ``.Page``        — same as a bare relative link (current ns + Page)
+
+    Returns the resolved path using ``/`` separators, suitable for use as
+    a URL path segment.
+    """
+    segs = target.split(":")
+    ns_parts = [p for p in cur_ns.split("/") if p]
+    i = 0
+    while i < len(segs):
+        if segs[i] == ".":
+            i += 1  # stay at current namespace level
+        elif segs[i] == "..":
+            if ns_parts:
+                ns_parts.pop()  # go up one namespace level
+            i += 1
+        else:
+            break
+    remaining = "/".join(segs[i:])
+    base = "/".join(ns_parts)
+    return (base + "/" + remaining).strip("/") if base else remaining
+
+
+
     """Return an HTML ``<ul>`` listing pages and sub-namespaces for *ns_key*.
 
     Args:
@@ -629,7 +660,9 @@ def parse_inline(text: str, cur_ns: str = "") -> str:
         alt_text = html.escape(pm[1].strip()) if len(pm) > 1 else None
         if not target:
             return html.escape(raw)
-        if target.startswith(":"):
+        if target.startswith((".:" , "..:" )):
+            full = _resolve_relative_ns(target, cur_ns)
+        elif target.startswith(":"):
             full = target[1:].replace(":", "/")
         elif ":" in target:
             full = target.replace(":", "/")
@@ -670,7 +703,9 @@ def parse_inline(text: str, cur_ns: str = "") -> str:
             return f'<a href="/files/{html.escape(full)}">&#128206; {lbl}</a>'
         if target.startswith(("http://", "https://")):
             return f'<a href="{html.escape(target)}" target="_blank" rel="noopener">{label or html.escape(target)}</a>'
-        if target.startswith(":"):
+        if target.startswith((".:" , "..:" )):
+            url = _resolve_relative_ns(target, cur_ns)
+        elif target.startswith(":"):
             url = target[1:].replace(":", "/")
         elif ":" in target:
             url = target.replace(":", "/")
