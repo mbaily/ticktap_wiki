@@ -492,7 +492,7 @@ def _pageindex_collect(d: Path, prefix: str) -> list[tuple[str, str]]:
     """
     results: list[tuple[str, str]] = []
     for child in sorted(d.iterdir()):
-        if child.is_dir() and re.fullmatch(r"[A-Za-z0-9_\-]+", child.name):
+        if child.is_dir() and not child.is_symlink() and re.fullmatch(r"[A-Za-z0-9_\-]+", child.name):
             rel = f"{prefix}/{child.name}" if prefix else child.name
             results.extend(_pageindex_collect(child, rel))
         elif child.suffix == ".wiki" and not child.name.startswith("_"):
@@ -1006,11 +1006,11 @@ def parse(src: str, name: str = "", section_edit: bool = True) -> tuple[str, lis
             continue
 
         # block macros — whole-line {{pageindex}}, {{pageindex:ns}}, with optional |deep and/or |desc flags
-        bm = re.fullmatch(r"\{\{pageindex(?::([A-Za-z0-9/_:\-]*))?(?:\|([a-z|]*))?\}\}", line.strip())
+        bm = re.fullmatch(r"\{\{pageindex(?::([A-Za-z0-9/_:\-]*))?(?:\|([a-zA-Z|]*))?\}\}", line.strip())
         if bm:
             flush_para(); close_table(); close_lists()
             raw_ns = (bm.group(1) or "").replace(":", "/").strip("/")
-            flags = set((bm.group(2) or "").split("|"))
+            flags = set((bm.group(2) or "").lower().split("|"))
             deep = "deep" in flags
             desc = "desc" in flags
             out.append(_render_pageindex(raw_ns or cur_ns, deep=deep, desc=desc))
