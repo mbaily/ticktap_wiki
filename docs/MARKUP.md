@@ -280,7 +280,7 @@ The server maps between the two automatically.
 {{image.png|alt text}}
 
 {{date}}   {{date:%d %b %Y}}   {{datetime}}
-{{pageindex}}   {{pageindex:ns}}
+{{pageindex}}   {{pageindex:ns}}   {{pageindex|deep}}   {{pageindex:ns|deep}}
 
 ----     (horizontal rule)
 ```
@@ -312,14 +312,21 @@ As of {{date:%d %B %Y}} at {{datetime}}
 Generates an automatic, live index of all pages and sub-namespaces in a given namespace. Must appear on its own line (it is a block-level element).
 
 ```
-{{pageindex}}              list pages in the current page's namespace
-{{pageindex:ns}}           list pages in namespace "ns"
-{{pageindex:ns:sub}}       list pages in nested namespace "ns/sub"
+{{pageindex}}              flat list of the current page's namespace
+{{pageindex:ns}}           flat list of namespace "ns"
+{{pageindex:ns:sub}}       flat list of nested namespace "ns/sub"
+{{pageindex|deep}}         recursive tree of the current page's namespace
+{{pageindex:ns|deep}}      recursive tree of namespace "ns"
 ```
 
-Each entry links to the page (`/wiki/…`) or namespace browse view (`/ns/…`).  Pages are sorted alphabetically and show their last-modified date.
+- **Flat mode** (default): lists immediate children only. Sub-namespaces appear as folder links.
+- **Deep mode** (`|deep`): sub-namespaces are recursively expanded into nested lists. The hierarchy is shown visually through indentation; page labels show the page name only, and the namespace is conveyed by the tree structure.
 
-**Example** — put this on a `projects/Home` page to auto-list everything in the `projects` namespace:
+Each entry links to the page (`/wiki/…`) or namespace browse view (`/ns/…`). Pages are sorted alphabetically and show their last-modified date.
+
+**Examples:**
 ```
-{{pageindex:projects}}
+{{pageindex:projects}}          flat list of the projects namespace
+{{pageindex:projects|deep}}     full recursive tree of projects
+{{pageindex|deep}}              recursive tree of the current namespace
 ```

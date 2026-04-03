@@ -482,12 +482,55 @@ def _expand_date_macros(text: str) -> str:
     return re.sub(r"\{\{(date(?::[^}]*)?|datetime)\}\}", _replace, text)
 
 
-def _render_pageindex(ns_key: str) -> str:
+def _pageindex_ul(d: Path, prefix: str, deep: bool) -> str:
+    """Build one ``<ul>`` level for ``_render_pageindex``.
+
+    In *deep* mode each sub-namespace entry gets a nested ``<ul>`` of its
+    own contents rather than being a plain folder link.  Page labels always
+    show the stem only; the namespace hierarchy is conveyed visually by the
+    nested list structure.
+
+    Returns an empty string when the directory contains no eligible items,
+    so callers can decide whether to emit a ``<ul>`` at all.
+    """
+    items = []
+    for child in sorted(d.iterdir()):
+        if child.is_dir() and re.fullmatch(r"[A-Za-z0-9_\-]+", child.name):
+            rel = f"{prefix}/{child.name}" if prefix else child.name
+            if deep:
+                sub = _pageindex_ul(child, rel, deep)
+                items.append(
+                    f'<li>&#128193; <a href="/ns/{html.escape(rel)}">{html.escape(child.name)}/</a>'
+                    + (sub if sub else "")
+                    + "</li>"
+                )
+            else:
+                items.append(f'<li>&#128193; <a href="/ns/{html.escape(rel)}">{html.escape(child.name)}/</a></li>')
+        elif child.suffix == ".wiki" and not child.name.startswith("_"):
+            pname = f"{prefix}/{child.stem}" if prefix else child.stem
+            try:
+                mtime = time.strftime("%Y-%m-%d", time.localtime(child.stat().st_mtime))
+            except OSError:
+                mtime = ""
+            items.append(
+                f'<li>&#128196; <a href="/wiki/{html.escape(pname)}">{html.escape(child.stem)}</a>'
+                + (f' <small style="color:#888">{mtime}</small>' if mtime else "")
+                + "</li>"
+            )
+    if not items:
+        return ""
+    return '<ul style="list-style:none;padding-left:0">' + "".join(items) + "</ul>"
+
+
+def _render_pageindex(ns_key: str, deep: bool = False) -> str:
     """Return an HTML ``<ul>`` listing pages and sub-namespaces for *ns_key*.
 
     Args:
         ns_key: Namespace path using ``/`` separators (e.g. ``"projects/sub"``).
                 Pass ``""`` for the wiki root.
+        deep:   When ``True`` sub-namespaces are expanded recursively into
+                nested ``<ul>`` trees.  When ``False`` (default) only the
+                immediate children are listed.
 
     Returns:
         HTML ``<ul>…</ul>`` string, or a short error paragraph if the namespace
@@ -507,25 +550,10 @@ def _render_pageindex(ns_key: str) -> str:
     if not target_dir.is_dir():
         return f'<p><em>No pages found in namespace <code>{html.escape(ns_key or "root")}</code>.</em></p>'
     prefix = "/".join(parts)
-    items = []
-    for child in sorted(target_dir.iterdir()):
-        if child.is_dir() and re.fullmatch(r"[A-Za-z0-9_\-]+", child.name):
-            rel = f"{prefix}/{child.name}" if prefix else child.name
-            items.append(f'<li>&#128193; <a href="/ns/{html.escape(rel)}">{html.escape(child.name)}/</a></li>')
-        elif child.suffix == ".wiki" and not child.name.startswith("_"):
-            pname = f"{prefix}/{child.stem}" if prefix else child.stem
-            try:
-                mtime = time.strftime("%Y-%m-%d", time.localtime(child.stat().st_mtime))
-            except OSError:
-                mtime = ""
-            items.append(
-                f'<li>&#128196; <a href="/wiki/{html.escape(pname)}">{html.escape(child.stem)}</a>'
-                + (f' <small style="color:#888">{mtime}</small>' if mtime else "")
-                + '</li>'
-            )
-    if not items:
+    result = _pageindex_ul(target_dir, prefix, deep)
+    if not result:
         return f'<p><em>No pages in namespace <code>{html.escape(ns_key or "root")}</code>.</em></p>'
-    return '<ul style="list-style:none;padding-left:0">' + "".join(items) + "</ul>"
+    return result
 
 # ── markup parser ──────────────────────────────────────────────────────────────
 
@@ -906,12 +934,13 @@ def parse(src: str, name: str = "", section_edit: bool = True) -> tuple[str, lis
             out.append(f'<li data-line="{i + meta_offset}" data-indent="{li_indent}" data-prefix="{li_prefix}">{text}{del_btn}</li>')
             continue
 
-        # block macros — whole-line {{pageindex}} or {{pageindex:ns}}
-        bm = re.fullmatch(r"\{\{pageindex(?::([A-Za-z0-9/_:\-]*))?\}\}", line.strip())
+        # block macros — whole-line {{pageindex}}, {{pageindex:ns}}, {{pageindex|deep}}, {{pageindex:ns|deep}}
+        bm = re.fullmatch(r"\{\{pageindex(?::([A-Za-z0-9/_:\-]*))?(?:\|(deep))?\}\}", line.strip())
         if bm:
             flush_para(); close_table(); close_lists()
             raw_ns = (bm.group(1) or "").replace(":", "/").strip("/")
-            out.append(_render_pageindex(raw_ns or cur_ns))
+            deep = bm.group(2) == "deep"
+            out.append(_render_pageindex(raw_ns or cur_ns, deep=deep))
             continue
 
         close_table()
