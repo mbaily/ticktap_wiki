@@ -1640,7 +1640,7 @@ def dir_listing(d: Path, prefix: str, hide_fn=None) -> str:
     Returns:
         HTML ``<ul>…</ul>`` string.
     """
-    items = "<ul>"
+    items = '<ul style="list-style:none;padding-left:0">'
     for child in sorted(d.iterdir()):
         if child.is_dir() and re.fullmatch(r"[A-Za-z0-9_\-]+", child.name):
             rel = f"{prefix}/{child.name}" if prefix else child.name
@@ -3030,7 +3030,7 @@ def sitemap(request: Request, _auth: None = Depends(require_auth)):
     """
     requester = getattr(request.state, "username", "") or ""
     def tree(d: Path, prefix: str) -> str:
-        s = "<ul>"
+        s = '<ul style="list-style:none;padding-left:1.2rem">'
         for child in sorted(d.iterdir()):
             if child.is_dir() and re.fullmatch(r"[A-Za-z0-9_\-]+", child.name):
                 rel = f"{prefix}/{child.name}" if prefix else child.name
