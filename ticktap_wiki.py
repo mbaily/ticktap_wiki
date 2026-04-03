@@ -198,6 +198,25 @@ def normalize_name(name: str) -> str:
     return "/".join(seg.replace(" ", "_") for seg in name.strip("/").split("/"))
 
 def page_path(name: str) -> Path:
+    """Resolve a wiki page name to its filesystem Path inside PAGES_DIR.
+
+    Normalises the name with ``normalize_name``, then validates every
+    path segment against the pattern ``[A-Za-z0-9_-]+``.  Raises
+    ``ValueError`` on an invalid segment or a path-traversal attempt.
+    The returned path is *not* guaranteed to exist — callers should
+    check ``Path.exists()`` themselves.
+
+    Args:
+        name: Wiki page name, optionally containing ``/`` namespace
+              separators (e.g. ``"projects/MyPage"``).
+
+    Returns:
+        Absolute ``Path`` object pointing to ``<PAGES_DIR>/<…>.wiki``.
+
+    Raises:
+        ValueError: If any segment is invalid or the resolved path
+                    would fall outside PAGES_DIR (path-traversal).
+    """
     name = normalize_name(name)
     parts = name.split("/")
     for p in parts:
@@ -209,10 +228,43 @@ def page_path(name: str) -> Path:
     return PAGES_DIR.joinpath(*parts).with_suffix(".wiki")
 
 def read_page(name: str) -> str | None:
+    """Read the raw wiki markup of a page from disk.
+
+    Args:
+        name: Wiki page name (e.g. ``"Home"`` or ``"projects/MyPage"``).
+
+    Returns:
+        Full file contents as a UTF-8 string, or ``None`` if the page
+        does not exist yet.
+    """
     p = page_path(name)
     return p.read_text(encoding="utf-8") if p.exists() else None
 
 def write_page(name: str, content: str, snapshot: bool = True):
+    """Write wiki markup to disk atomically, optionally snapshotting the previous version.
+
+    Steps performed:
+
+    1. Resolve and validate the page path (raises ``ValueError`` on bad name).
+    2. Normalise line endings to ``\\n`` and strip NUL bytes.
+    3. If ``snapshot=True`` and the page already exists, call
+       ``_save_snapshot`` followed by ``_prune_attic``; versioning
+       failures are silently suppressed so they never block a save.
+    4. Write to a temp file in the same directory, then atomically
+       rename it over the target — preventing torn writes.
+
+    Args:
+        name:     Wiki page name.
+        content:  New page markup (``\\r\\n`` is accepted and normalised).
+        snapshot: When ``True`` (default), save the previous version to
+                  the attic before overwriting.  Pass ``False`` for
+                  in-place mutations (toggle, add-todo, reorder) that
+                  should not generate history entries.
+
+    Raises:
+        ValueError: If the page name is invalid.
+        OSError:    If the underlying file-system write fails.
+    """
     p = page_path(name)
     p.parent.mkdir(parents=True, exist_ok=True)
     # Normalise line endings: browsers send \r\n; Python text-mode write on
@@ -263,6 +315,20 @@ def _attic_page_dir(name: str) -> Path:
     return target
 
 def _save_snapshot(name: str, content: str):
+    """Write a timestamped snapshot of *content* to the attic directory.
+
+    The snapshot filename is ``YYYYmmdd_HHMMSS_microseconds.wiki``,
+    derived from the current UTC time.  If a file with the same stem
+    already exists (same-second save race), the existing snapshot is
+    kept and the new one is silently discarded.
+
+    The write is atomic: the content is written to a ``.tmp`` file
+    that is then renamed over the final path.
+
+    Args:
+        name:    Wiki page name used to determine the attic sub-directory.
+        content: Page markup to store verbatim.
+    """
     d = _attic_page_dir(name)
     d.mkdir(parents=True, exist_ok=True)
     _now = datetime.now(timezone.utc)
@@ -278,6 +344,27 @@ def _save_snapshot(name: str, content: str):
         tmp.unlink(missing_ok=True)
 
 def _prune_attic(name: str):
+    """Thin the version history for a page using an exponential retention formula.
+
+    Retention strategy (mirrors a logarithmic time-decay approach):
+
+    * Any snapshot older than ``exp(K) * T`` seconds is deleted.
+    * Remaining snapshots are assigned to a band
+      ``i = floor(log(age / T))`` capped at ``K-1``.
+    * Within each band only the **newest** snapshot is kept (it records
+      the state at the *end* of that time interval).
+    * Snapshots younger than ``T`` seconds keep only the **oldest** one
+      (it records the pre-edit state at the start of a rapid-edit session).
+
+    Configuration constants: ``VERSION_BASE_SECS`` (T) and
+    ``VERSION_SLOTS`` (K).
+
+    Orphaned ``.tmp`` files left by a previous crashed save are also
+    removed as part of cleanup.
+
+    Args:
+        name: Wiki page name whose attic directory should be pruned.
+    """
     d = _attic_page_dir(name)
     if not d.is_dir():
         return
@@ -356,12 +443,57 @@ def parse_meta(src: str) -> dict[str, str]:
 
 
 def slug(text: str) -> str:
+    """Convert a heading text string into a URL-safe anchor slug.
+
+    Lowercases the text, replaces runs of non-alphanumeric characters
+    with hyphens, and strips leading/trailing hyphens.  Returns
+    ``"heading"`` if the result would otherwise be empty.
+
+    Args:
+        text: Raw heading text (not HTML-escaped).
+
+    Returns:
+        Slug string suitable for use as an HTML ``id`` attribute.
+    """
     s = re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
     return s or "heading"
 
 # ── markup parser ──────────────────────────────────────────────────────────────
 
 def parse_inline(text: str, cur_ns: str = "") -> str:
+    """Render inline DokuWiki markup in *text* to an HTML fragment.
+
+    Handles the following inline constructs (in order of processing):
+
+    * ``[[WikiLinks]]`` and ``{{media}}`` tokens are *stashed* first
+      (replaced with NUL-byte placeholders) so that their contents
+      cannot accidentally match later patterns such as ``//italic//``
+      over a URL's double-slash.  They are restored after all other
+      substitutions are applied.
+    * HTML-escaping of the remaining text.
+    * Bold (``**...**``), italic (``//...//``), underline (``__...__``),
+      inline code (\u0060...\u0060), strikethrough (``~~...~~``).
+    * ``{{ns:file.ext|alt}}`` — embedded media.  Resolves the namespace
+      relative to *cur_ns* when no explicit namespace qualifier is given.
+      Renders as ``<img>`` for image extensions; shows a
+      ``broken-file`` span if the file is not found on disk.
+    * ``[[target|label]]`` — wiki links.  Supports:
+
+      - Absolute links prefixed with ``:`` (root namespace).
+      - Cross-namespace links with ``:``-separated components.
+      - Relative links resolved against *cur_ns*.
+      - External ``http://`` / ``https://`` links (open in new tab).
+      - ``[[file:...]]`` links to attached files.
+      - Adds ``class="new-page"`` when the target page does not exist.
+
+    Args:
+        text:    Raw wiki markup string (a single paragraph/line).
+        cur_ns:  Namespace of the page being rendered, used to resolve
+                 relative links and media paths (e.g. ``"projects/sub"``).
+
+    Returns:
+        HTML string ready for insertion into the page body.
+    """
     # Stash [[links]] and {{media}} as null-byte placeholders so inline
     # patterns (especially //italic//) cannot match across URL double-slashes.
     # Non-greedy is correct: wiki syntax forbids nesting, so the first closing
@@ -484,6 +616,53 @@ def _parse_table_row(line: str) -> list | None:
 
 
 def parse(src: str, name: str = "", section_edit: bool = True) -> tuple[str, list]:
+    """Convert a full block of DokuWiki-style wiki markup to HTML.
+
+    Processes the source line-by-line, maintaining state machines for
+    fenced code blocks, ordered/unordered lists, tables, and paragraph
+    accumulation.  Calls ``parse_inline`` for all inline content.
+
+    Supported block-level constructs:
+
+    * **Fenced code blocks** — triple-backtick delimiters with optional
+      language hint (e.g. ````` ````python`````).  Rendered as
+      ``<pre><code class="language-...">``.
+    * **Headings** — DokuWiki style (``====== h1 ======`` down to
+      ``== h5 ==``); the number of ``=`` signs determines the level.
+      Duplicate heading texts receive disambiguating suffixes
+      (``-2``, ``-3``, …).  Optional ``[edit]`` / block-editor links
+      are injected when ``section_edit=True`` and *name* is set.
+    * **Horizontal rules** — four or more dashes on a line.
+    * **Todo checkboxes** — lines beginning with ``[ ]``, ``[x]``, or
+      ``[~]`` (with optional leading spaces for nesting).
+    * **Tables** — DokuWiki pipe/caret syntax; header cells (``^``) and
+      data cells (``|``) with colspan support.
+    * **Ordered and unordered lists** — lines indented with two-or-more
+      spaces + ``*`` (bullet) or ``-`` (numbered); nesting is handled
+      by changing indent depth.
+    * **Paragraphs** — non-blank lines not matching any other pattern
+      are accumulated and wrapped in ``<p>``; within a paragraph,
+      consecutive lines are joined with ``<br>`` (when
+      ``LINEBREAK_ON_NEWLINE=True``) or a space.
+    * **``~~META:`` blocks** — stripped before parsing via ``strip_meta``;
+      the removed line count is tracked so that ``data-line`` attributes
+      reference the original source line numbers (used by the quick-todo
+      and section-edit features).
+
+    Args:
+        src:          Raw wiki markup (as stored in ``.wiki`` files).
+        name:         Wiki page name; used to build ``[edit]`` links and
+                      resolve relative links.  Pass ``""`` to disable.
+        section_edit: When ``True`` (default), inject section-edit
+                      buttons next to qualifying headings.
+
+    Returns:
+        A ``(html_body, headings)`` tuple where:
+
+        * ``html_body`` is the full HTML string for the page body.
+        * ``headings`` is a list of ``(level, text, anchor)`` tuples in
+          document order; used to build the table-of-contents.
+    """
     src, meta_offset = strip_meta(src)
     lines = src.split("\n")
     out, headings, list_stack = [], [], []
@@ -1091,6 +1270,16 @@ JS_URL      = f"/static/app-{_JS_HASH}.js"
 
 @app.get("/static/style-{h}.css")
 def serve_css(h: str):
+    """Serve the pre-compiled stylesheet with an immutable cache header.
+
+    The URL path embeds the first 12 hex characters of the SHA-256 hash
+    of the CSS content.  Requests for a stale hash (e.g. after a server
+    restart with changed config) receive a 404 so the browser fetches
+    the new URL.
+
+    Args:
+        h: Hash segment extracted from the URL path.
+    """
     from fastapi.responses import Response
     if h != _CSS_HASH:
         return Response(status_code=404)
@@ -1099,6 +1288,14 @@ def serve_css(h: str):
 
 @app.get("/static/app-{h}.js")
 def serve_js(h: str):
+    """Serve the main client-side JavaScript bundle with an immutable cache header.
+
+    Uses the same hash-in-URL cache-busting strategy as ``serve_css``.
+    Returns 404 when the hash does not match the currently loaded JS.
+
+    Args:
+        h: Hash segment extracted from the URL path.
+    """
     from fastapi.responses import Response
     if h != _JS_HASH:
         return Response(status_code=404)
@@ -1107,6 +1304,14 @@ def serve_js(h: str):
 
 @app.get("/static/block-editor-{h}.js")
 def serve_block_editor_js(h: str):
+    """Serve the block-editor JavaScript bundle with an immutable cache header.
+
+    The bundle is loaded from ``block_editor.js`` at startup.  Returns
+    404 when the hash does not match the file that was loaded.
+
+    Args:
+        h: Hash segment extracted from the URL path.
+    """
     from fastapi.responses import Response
     if h != BLOCK_EDITOR_JS_HASH:
         return Response(status_code=404)
@@ -1116,6 +1321,25 @@ def serve_block_editor_js(h: str):
 # ── HTML helpers ───────────────────────────────────────────────────────────────
 
 def nav_bar(search_q: str = "", username: str = "") -> str:
+    """Build the top navigation bar HTML string.
+
+    Renders the site title, standard nav links (Site Map, New Page,
+    Today, Tags, Orphaned Files), an optional “My page” link when
+    ``USER_PAGE_NS`` is set and the user is logged in, a settings
+    gear icon, a search form, and a logout button.
+
+    Links listed in ``NAV_ICON_ONLY`` are rendered with only their
+    icon character and a ``title`` tooltip rather than icon + text,
+    saving horizontal space.
+
+    Args:
+        search_q: Pre-filled search query value (HTML-escaped).
+        username: Authenticated username, used to show logout and
+                  personal-page links.  Empty string for anonymous.
+
+    Returns:
+        HTML ``<nav>`` element string.
+    """
     q = html.escape(search_q)
 
     def _lnk(key: str, href: str, icon: str, label: str) -> str:
@@ -1252,6 +1476,23 @@ def trace_bar(request: Request | None) -> str:
 
 
 def pins_bar(request: Request | None) -> str:
+    """Build the pinned-pages bar HTML string.
+
+    Reads the current user’s pin list via ``_get_pins``.  If
+    ``USER_PAGE_HIDDEN`` is enabled, pins belonging to other users’
+    namespaces are filtered out before rendering.
+
+    When there are no visible pins the element is still emitted but
+    with ``style="display:none"`` so that client-side pin-toggle
+    JavaScript can find and show it without a page reload.
+
+    Args:
+        request: The current HTTP request (used to read cookies /
+                 user settings).  May be ``None``.
+
+    Returns:
+        HTML ``<div id="pin-bar" …>`` element string.
+    """
     pins = _get_pins(request)
     if USER_PAGE_HIDDEN and USER_PAGE_NS:
         requester = (getattr(request.state, "username", "") or "") if request is not None else ""
@@ -1267,6 +1508,33 @@ def pins_bar(request: Request | None) -> str:
 
 
 def shell(title: str, body: str, search_q: str = "", request: Request | None = None) -> str:
+    """Wrap *body* in a full HTML page, including the navigation and pin bar.
+
+    Produces a complete ``<!doctype html>`` document with:
+
+    * A ``<title>`` of ``“{title} — {SITE_TITLE}”``.
+    * The versioned CSS and JS ``<link>``/``<script>`` references
+      (cache-busted by content hash).
+    * The site navigation bar (via ``nav_bar``) and pinned-pages bar
+      (via ``pins_bar``).
+    * *body* injected verbatim between the bars and the closing
+      ``</body>`` tag.
+
+    When ``AUTH_ENABLED`` is ``True`` the authenticated username is
+    resolved from the request state (or the token cookie) and passed
+    to ``nav_bar`` so the logout button shows the correct name.
+
+    Args:
+        title:     Page-specific title string (not HTML-escaped —
+                   callers should escape if needed).
+        body:      Pre-rendered HTML body content.
+        search_q:  Value to pre-fill in the nav search box.
+        request:   Current HTTP request; ``None`` is safe (yields an
+                   anonymous nav bar).
+
+    Returns:
+        Full HTML document string.
+    """
     username = ""
     if AUTH_ENABLED and request is not None:
         username = getattr(request.state, "username", None)
@@ -1281,6 +1549,25 @@ def shell(title: str, body: str, search_q: str = "", request: Request | None = N
             f'<script src="{JS_URL}"></script></body></html>')
 
 def breadcrumb(name: str) -> str:
+    """Build a DokuWiki-style breadcrumb navigation trail for a page.
+
+    Produces a ``<div class="breadcrumb">`` with links for each
+    namespace component, anchored to the namespace index (``/ns/…``),
+    plus a plain-text current page name at the end.  The root link
+    always points to ``/wiki/Home``.
+
+    Example for page ``"projects/sub/MyPage"``:
+
+    .. code-block:: text
+
+        root › projects › sub › MyPage
+
+    Args:
+        name: Wiki page name with ``/`` namespace separators.
+
+    Returns:
+        HTML ``<div class="breadcrumb">…</div>`` string.
+    """
     parts = name.split("/")
     crumbs = [f'<a href="/wiki/Home">root</a>']
     for i, p in enumerate(parts[:-1]):
@@ -1298,6 +1585,26 @@ def _toc_max(meta: dict) -> int | None:
 
 
 def toc_html(headings: list, max_level: int | None = None) -> str:
+    """Build a collapsible Table of Contents HTML block.
+
+    Filters the headings list to those whose level does not exceed
+    *max_level* (or ``TOC_MAX_LEVEL`` when *max_level* is ``None``).
+    Returns an empty string when no headings survive the filter.
+
+    The TOC ``<ul>`` is rendered with per-level CSS classes
+    (``h2``, ``h3``, …) that drive indentation.  A toggle button
+    collapses or expands the list via inline JavaScript.
+
+    Args:
+        headings:  List of ``(level, text, anchor)`` tuples as returned
+                   by ``parse``.
+        max_level: Deepest heading level to include (1–5).  ``None``
+                   uses the site-wide ``TOC_MAX_LEVEL`` setting.
+
+    Returns:
+        HTML ``<div class="toc">…</div>`` string, or ``""`` when there
+        are no headings at or above the requested depth.
+    """
     cap = max_level if max_level is not None else TOC_MAX_LEVEL
     visible = [(lvl, txt, anc) for lvl, txt, anc in headings if lvl <= cap]
     if not visible:
@@ -1311,6 +1618,28 @@ def toc_html(headings: list, max_level: int | None = None) -> str:
             f'</h3><ul>{items}</ul></div>')
 
 def dir_listing(d: Path, prefix: str, hide_fn=None) -> str:
+    """Build an HTML ``<ul>`` listing sub-directories and wiki pages in *d*.
+
+    Directories are shown with a folder icon and link to ``/ns/<rel>``.
+    Wiki files (``.wiki`` extension, excluding names starting with
+    ``_``) are shown with a page icon, a link to ``/wiki/<name>``, and
+    a faint last-modified date.
+
+    The optional *hide_fn* callable receives each item’s relative path
+    string and should return ``True`` to suppress the item from the
+    listing (used to hide other users’ private pages when
+    ``USER_PAGE_HIDDEN`` is enabled).
+
+    Args:
+        d:       Directory to list (a ``pathlib.Path``).
+        prefix:  Namespace prefix string to prepend to child names
+                 (e.g. ``"projects/sub"``).  Pass ``""`` for the root.
+        hide_fn: Optional callable ``(relative_path: str) -> bool``.
+                 Items for which it returns ``True`` are omitted.
+
+    Returns:
+        HTML ``<ul>…</ul>`` string.
+    """
     items = "<ul>"
     for child in sorted(d.iterdir()):
         if child.is_dir() and re.fullmatch(r"[A-Za-z0-9_\-]+", child.name):
@@ -1379,9 +1708,17 @@ def files_section(ns: str) -> str:
 # ---- token store ----
 
 def _now() -> datetime:
+    """Return the current UTC time as a timezone-aware ``datetime``."""
     return datetime.now(timezone.utc)
 
 def _load_tokens() -> dict:
+    """Load the token store from ``TOKEN_FILE`` and return it as a dict.
+
+    The file is a JSON object mapping token strings to dicts with
+    ``"user"``, ``"issued"``, and ``"expires"`` ISO-8601 fields.
+    Returns an empty dict if the file does not exist or cannot be
+    parsed.
+    """
     if TOKEN_FILE.exists():
         try:
             data = json.loads(TOKEN_FILE.read_text(encoding="utf-8"))
@@ -1392,6 +1729,16 @@ def _load_tokens() -> dict:
     return {}
 
 def _save_tokens(tokens: dict):
+    """Persist the token store dict atomically to ``TOKEN_FILE``.
+
+    Writes to a randomly-named temp file with mode ``0o600``, renames
+    it over the target, then ensures the target also has mode ``0o600``.
+    The temp file is removed in a ``finally`` block even if an error
+    occurs mid-write.
+
+    Args:
+        tokens: Dict mapping token strings to their metadata dicts.
+    """
     tmp = TOKEN_FILE.parent / f"{TOKEN_FILE.name}.{secrets.token_hex(4)}.tmp"
     try:
         tmp.write_text(json.dumps(tokens, indent=2), encoding="utf-8")
@@ -1404,6 +1751,22 @@ def _save_tokens(tokens: dict):
 _token_lock = threading.Lock()
 
 def _issue_token(username: str) -> str:
+    """Create, persist, and return a new authentication token for *username*.
+
+    Generates a 64-character hex token using ``secrets.token_hex``.
+    Before writing, expired tokens are pruned from the store.
+    The token is valid for ``TOKEN_EXPIRY_DAYS`` days from issuance.
+
+    The load-prune-add-save cycle is protected by a module-level
+    ``threading.Lock`` to prevent concurrent writers from corrupting
+    the file.
+
+    Args:
+        username: The authenticated username to associate with the token.
+
+    Returns:
+        The newly issued token string (64 hex characters).
+    """
     token = secrets.token_hex(32)
     now = _now()
     def _is_valid_unexpired(v: object) -> bool:
@@ -1439,6 +1802,15 @@ def _validate_token(token: str) -> str | None:
         return None
 
 def _revoke_token(token: str):
+    """Remove *token* from the persistent token store.
+
+    Called on logout.  The operation is a no-op if the token does not
+    exist in the store (e.g. already expired and pruned).  Thread-safe
+    via the module-level ``_token_lock``.
+
+    Args:
+        token: Token string to revoke.
+    """
     with _token_lock:
         tokens = _load_tokens()
         tokens.pop(token, None)
@@ -1484,6 +1856,11 @@ def _check_rate(ip: str) -> bool:
     return len(hits) < _FAIL_MAX
 
 def _record_fail(ip: str):
+    """Record a failed login attempt for *ip* in the in-memory rate-limit log.
+
+    Args:
+        ip: Client IP address string (as returned by ``_real_ip``).
+    """
     now = time.monotonic()
     _fail_log.setdefault(ip, []).append(now)
 
@@ -1549,6 +1926,25 @@ def _htpasswd_set(username: str, password: str, htfile: Path):
 _auth_log = logging.getLogger("ticktap_wiki.auth")
 
 def require_auth(request: Request):
+    """FastAPI dependency that enforces authentication when ``AUTH_ENABLED`` is ``True``.
+
+    If the request carries a valid token (via cookie, query parameter,
+    or ``Authorization: Bearer`` header), the resolved username is
+    stored on ``request.state.username`` and the dependency returns
+    normally.
+
+    If authentication is disabled (``AUTH_ENABLED=False``),
+    ``request.state.username`` is set to ``""`` and the dependency
+    always succeeds.
+
+    When the request is unauthenticated, raises ``_LoginRedirect``,
+    which is caught by the registered exception handler and turned into
+    a ``303 See Other`` redirect to ``/login?next=<original_url>``.
+
+    Args:
+        request: The current FastAPI ``Request`` object (injected by
+                 the dependency system).
+    """
     if not AUTH_ENABLED:
         request.state.username = ""
         return
@@ -1589,6 +1985,17 @@ def favicon(request: Request):
 
 @app.get("/")
 def root(request: Request, _auth: None = Depends(require_auth)):
+    """Redirect to the appropriate landing page for the current user.
+
+    Resolution order:
+
+    1. If logged in and the user has a ``home_page`` setting, redirect
+       there (after validating it as a legal page name).
+    2. If ``USER_PAGE_NS`` is configured and the username forms a valid
+       page-name segment, redirect to
+       ``<USER_PAGE_NS>/<username>/<USER_HOME_PAGE>``.
+    3. Fall through to ``/wiki/Home``.
+    """
     username = getattr(request.state, "username", "") or ""
     if username:
         saved = _get_user_setting(username, "home_page")
@@ -1613,6 +2020,14 @@ def root(request: Request, _auth: None = Depends(require_auth)):
 
 @app.get("/me")
 def my_page(request: Request, _auth: None = Depends(require_auth)):
+    """Redirect the logged-in user to their personal homepage.
+
+    Constructs the path ``<USER_PAGE_NS>/<username>/<USER_HOME_PAGE>``
+    and issues a 303 redirect.  Redirects to ``/wiki/Home`` when
+    ``USER_PAGE_NS`` is not configured, when the user is not
+    authenticated, or when the username contains characters illegal
+    in a page-name segment.
+    """
     if not USER_PAGE_NS:
         return RedirectResponse("/wiki/Home", status_code=303)
     username = request.state.username
@@ -1628,6 +2043,23 @@ def my_page(request: Request, _auth: None = Depends(require_auth)):
 
 @app.get("/settings", response_class=HTMLResponse)
 def settings_get(request: Request, saved: str = "", _auth: None = Depends(require_auth)):
+    """Render the user settings page (GET).
+
+    Displays two fieldsets:
+
+    * **Navigation** — home page override (colon-separated page name).
+    * **Today link** — journal page format template with a live
+      JavaScript preview updated as the user types.
+
+    Shows a “saved” banner when the ``saved=1`` query parameter is
+    present (set by ``settings_post`` after a successful save).
+
+    Redirects to ``/wiki/Home`` when the user is not authenticated.
+
+    Args:
+        request: Current HTTP request.
+        saved:   ``"1"`` to display the success banner.
+    """
     username = getattr(request.state, "username", "") or ""
     if not username:
         return RedirectResponse("/wiki/Home", status_code=303)
@@ -1740,6 +2172,20 @@ def settings_get(request: Request, saved: str = "", _auth: None = Depends(requir
 
 @app.post("/settings", response_class=HTMLResponse)
 def settings_post(request: Request, home_page: str = Form(""), journal_format: str = Form(""), _auth: None = Depends(require_auth)):
+    """Save user settings (POST).
+
+    Validates the submitted home-page name and journal-format template,
+    then persists them together as a single atomic write.  On
+    validation error returns a 400 page with an error message.
+    On success redirects to ``/settings?saved=1``.
+
+    Args:
+        request:        Current HTTP request.
+        home_page:      New home-page setting (colon-separated page
+                        name, or empty to use the site default).
+        journal_format: New journal page format template string, or
+                        empty to use the site default.
+    """
     username = getattr(request.state, "username", "") or ""
     if not username:
         return RedirectResponse("/wiki/Home", status_code=303)
@@ -1792,6 +2238,26 @@ def settings_post(request: Request, home_page: str = Form(""), journal_format: s
 
 @app.get("/wiki/{name:path}", response_class=HTMLResponse)
 def view(request: Request, name: str, _auth: None = Depends(require_auth)):
+    """Render and display a wiki page.
+
+    Flow:
+
+    1. Normalise and access-check the page name.
+    2. Read the raw markup with ``read_page``; if missing, show a
+       “page does not exist” notice with a create link.
+    3. Parse the markup with ``parse`` to produce HTML and a headings
+       list for the TOC.
+    4. Build the reader toolbar (edit, history, rename, pin, delete
+       links), the quick-todo floating bar, and the floating add-todo
+       button.
+    5. Update the user’s recently-visited trace via ``_update_trace``.
+    6. Wrap everything in ``shell`` and return an ``HTMLResponse``.
+
+    Args:
+        request: Current HTTP request.
+        name:    Wiki page name from the URL path (may include ``/``
+                 namespace separators).
+    """
     name = normalize_name(name)
     _check_page_reader(request, name)
     try:
@@ -1960,6 +2426,20 @@ def view(request: Request, name: str, _auth: None = Depends(require_auth)):
 
 @app.get("/sect/{name:path}/{idx}", response_class=HTMLResponse)
 def edit_section_get(request: Request, name: str, idx: int, _auth: None = Depends(require_auth)):
+    """Render the section editor for a single editable heading section.
+
+    Locates section *idx* using ``find_editable_sections``, extracts the
+    corresponding source lines, and renders a ``<textarea>`` editor
+    pre-populated with just those lines.  The heading’s deduplicated
+    anchor is passed as a hidden form field so that the save handler
+    can redirect back to the correct section heading even after
+    concurrent edits have shifted line numbers.
+
+    Args:
+        request: Current HTTP request.
+        name:    Wiki page name.
+        idx:     0-based section index to edit.
+    """
     name = normalize_name(name)
     _check_page_reader(request, name)
     _check_page_owner(request, name)
@@ -1993,6 +2473,22 @@ def edit_section_get(request: Request, name: str, idx: int, _auth: None = Depend
 
 @app.post("/sect/{name:path}/{idx}", response_class=HTMLResponse)
 async def edit_section_post(request: Request, name: str, idx: int, content: str = Form(""), anchor: str = Form(""), _auth: None = Depends(require_auth)):
+    """Accept a posted section edit and splice it back into the full page.
+
+    Replaces lines ``[start_line:end_line]`` of the existing source with
+    the posted *content*.  When an *anchor* is provided the section is
+    located by anchor match (robust to concurrent edits changing line
+    numbers) rather than purely by *idx*.  After saving, redirects to
+    the page anchored at the edited heading.
+
+    Args:
+        request: Current HTTP request.
+        name:    Wiki page name.
+        idx:     0-based section index (used as a fallback when *anchor*
+                 doesn’t match).
+        content: New markup for the section only.
+        anchor:  Heading anchor slug from the GET form’s hidden field.
+    """
     name = normalize_name(name)
     _check_page_reader(request, name)
     _check_page_owner(request, name)
@@ -2088,6 +2584,18 @@ def _check_file_ns_owner(request: Request, ns: str):
 
 @app.get("/edit/{name:path}", response_class=HTMLResponse)
 def edit_get(request: Request, name: str, _auth: None = Depends(require_auth)):
+    """Render the full-page markup editor for a wiki page.
+
+    Loads existing content (or generates a default skeleton for new
+    pages) and renders a ``<textarea>`` editor with the markup toolbar
+    and a live-preview button.  An “Attach” button opens the file
+    upload popup in a new tab, pre-seeded with the namespace of the
+    current page.
+
+    Args:
+        request: Current HTTP request.
+        name:    Wiki page name to edit.
+    """
     name = normalize_name(name)
     _check_page_reader(request, name)
     _check_page_owner(request, name)
@@ -2132,6 +2640,17 @@ def edit_get(request: Request, name: str, _auth: None = Depends(require_auth)):
 
 @app.post("/edit/{name:path}", response_class=HTMLResponse)
 async def edit_post(request: Request, name: str, content: str = Form(""), _auth: None = Depends(require_auth)):
+    """Accept a posted full-page edit and save it.
+
+    Validates the page name, writes the new content via ``write_page``
+    (which handles line-ending normalisation, atomic replace, and
+    snapshotting), then redirects to the reader view.
+
+    Args:
+        request: Current HTTP request.
+        name:    Wiki page name to save.
+        content: New raw wiki markup from the editor ``<textarea>``.
+    """
     name = normalize_name(name)
     _check_page_reader(request, name)
     _check_page_owner(request, name)
@@ -2146,12 +2665,41 @@ async def edit_post(request: Request, name: str, content: str = Form(""), _auth:
 
 @app.post("/preview", response_class=HTMLResponse)
 async def preview(name: str = Form(""), content: str = Form(""), _auth: None = Depends(require_auth)):
+    """Render a preview of wiki markup and return the HTML fragment.
+
+    Called via ``fetch`` from the editor page.  Parses *content* with
+    ``section_edit=False`` (no [edit] buttons) and returns the
+    resulting HTML string directly — not wrapped in a full shell page.
+
+    Args:
+        name:    Page name (used for resolving relative links).
+        content: Raw wiki markup to render.
+    """
     rendered, _ = parse(content, name, section_edit=False)
     return HTMLResponse(rendered)
 
 
 @app.post("/toggle/{name:path}/{line}", response_class=HTMLResponse)
 async def toggle(request: Request, name: str, line: int, _auth: None = Depends(require_auth)):
+    """Toggle or cycle the checkbox state of a single todo line.
+
+    Reads the page source, locates line number *line*, and applies
+    the state cycle defined by ``TODO_CYCLE_3STATE``:
+
+    * When ``TODO_CYCLE_3STATE=False`` (default): ``[ ]`` ↔ ``[x]``.
+    * When ``TODO_CYCLE_3STATE=True``: ``[ ]`` → ``[x]`` → ``[~]`` → ``[ ]``.
+
+    The write is done with ``snapshot=False`` to avoid polluting the
+    version history with every checkbox click.
+
+    Returns the new single-character state (``' '``, ``'x'``, or
+    ``'~'``) as plain text so the client can update the DOM.
+
+    Args:
+        request: Current HTTP request.
+        name:    Wiki page name.
+        line:    0-based line number of the checkbox to toggle.
+    """
     name = normalize_name(name)
     _check_page_reader(request, name)
     _check_page_owner(request, name)
@@ -2190,6 +2738,27 @@ async def toggle(request: Request, name: str, line: int, _auth: None = Depends(r
 
 @app.post("/add-todo/{name:path}")
 async def add_todo(name: str, request: Request, _auth: None = Depends(require_auth)):
+    """Insert a new todo or list item into a wiki page via JSON.
+
+    The JSON request body must contain:
+
+    * ``after_line`` (int): Insert the new item *after* this 0-based
+      line number.  Use a large value (e.g. 999999) to append at the
+      end of the page.
+    * ``text`` (str): Todo/item text (newlines collapsed to spaces).
+    * ``indent`` (int, 0–20): Indentation level in units of 2 spaces.
+    * ``prefix`` (str): One of ``"[ ] "``, ``"* "``, or ``"- "``.
+
+    The write uses ``snapshot=False`` to avoid generating a history
+    entry for each item addition.
+
+    Returns JSON ``{"ok": true, "line": <inserted_line_number>}`` on
+    success, or ``{"ok": false, "error": "..."}`` on failure.
+
+    Args:
+        name:    Wiki page name.
+        request: Current HTTP request (body read as JSON).
+    """
     name = normalize_name(name)
     _check_page_reader(request, name)
     _check_page_owner(request, name)
@@ -2232,6 +2801,23 @@ async def add_todo(name: str, request: Request, _auth: None = Depends(require_au
 
 @app.post("/delete-line/{name:path}/{line}")
 async def delete_line(request: Request, name: str, line: int, _auth: None = Depends(require_auth)):
+    """Delete a single todo or list item line from a wiki page.
+
+    Only lines matching the todo pattern (``[ ]``, ``[x]``, ``[~]``)
+    or the list-item pattern (two-or-more leading spaces + ``*``/``-``)
+    may be deleted via this endpoint.  Attempting to delete any other
+    line returns a 400 error.
+
+    The write uses ``snapshot=False`` since inline deletions are
+    considered minor edits that should not generate history entries.
+
+    Returns JSON ``{"ok": true, "deleted_line": <N>}`` on success.
+
+    Args:
+        request: Current HTTP request.
+        name:    Wiki page name.
+        line:    0-based index of the line to delete.
+    """
     name = normalize_name(name)
     _check_page_reader(request, name)
     _check_page_owner(request, name)
@@ -2261,6 +2847,16 @@ async def delete_line(request: Request, name: str, line: int, _auth: None = Depe
 
 @app.get("/raw/{name:path}")
 def raw_page(request: Request, name: str, _auth: None = Depends(require_auth)):
+    """Return the raw wiki markup of a page as JSON.
+
+    Used by the block editor JavaScript to load page content without
+    a full HTML render.  Returns ``{"content": "<markup>"}`` with an
+    empty string when the page does not exist yet.
+
+    Args:
+        request: Current HTTP request.
+        name:    Wiki page name.
+    """
     name = normalize_name(name)
     _check_page_reader(request, name)
     try:
@@ -2272,6 +2868,18 @@ def raw_page(request: Request, name: str, _auth: None = Depends(require_auth)):
 
 @app.get("/raw-sect/{name:path}/{idx}")
 def raw_section(request: Request, name: str, idx: int, _auth: None = Depends(require_auth)):
+    """Return the raw markup for a single editable section as JSON.
+
+    Locates section number *idx* using ``find_editable_sections`` and
+    returns ``{"content": "<section_markup>", "anchor": "<slug>"}``.
+    Used by the block-editor to load individual sections.
+
+    Args:
+        request: Current HTTP request.
+        name:    Wiki page name.
+        idx:     0-based section index (as assigned by
+                 ``find_editable_sections``).
+    """
     name = normalize_name(name)
     _check_page_reader(request, name)
     if idx < 0:
@@ -2291,6 +2899,18 @@ def raw_section(request: Request, name: str, idx: int, _auth: None = Depends(req
 
 @app.get("/block-edit/{name:path}", response_class=HTMLResponse)
 def block_edit(request: Request, name: str, _auth: None = Depends(require_auth)):
+    """Render the block-editor UI for a full wiki page.
+
+    Emits a minimal shell page containing only a ``<div
+    id="block-editor-root" data-page="...">`` mount point and a
+    ``<script>`` tag loading ``block_editor.js``.  The JavaScript
+    bundle takes over from there and fetches the page content via
+    ``/raw/<name>``.
+
+    Args:
+        request: Current HTTP request.
+        name:    Wiki page name to edit.
+    """
     name = normalize_name(name)
     _check_page_reader(request, name)
     _check_page_owner(request, name)
@@ -2305,6 +2925,18 @@ def block_edit(request: Request, name: str, _auth: None = Depends(require_auth))
 
 @app.get("/block-sect/{name:path}/{idx}", response_class=HTMLResponse)
 def block_sect(request: Request, name: str, idx: int, _auth: None = Depends(require_auth)):
+    """Render the block-editor UI scoped to a single section.
+
+    Like ``block_edit`` but adds a ``data-sect="{idx}"`` attribute on
+    the root element so the JavaScript knows to operate on one section
+    rather than the full page.  Content is fetched via
+    ``/raw-sect/<name>/<idx>``.
+
+    Args:
+        request: Current HTTP request.
+        name:    Wiki page name.
+        idx:     0-based section index to edit.
+    """
     name = normalize_name(name)
     _check_page_reader(request, name)
     _check_page_owner(request, name)
@@ -2324,6 +2956,13 @@ def block_sect(request: Request, name: str, idx: int, _auth: None = Depends(requ
 
 @app.get("/new", response_class=HTMLResponse)
 def new_page(request: Request, _auth: None = Depends(require_auth)):
+    """Render the new-page creation form.
+
+    Displays a text input for the page name (colon-separated namespace
+    notation is accepted).  On submit the browser navigates directly to
+    ``/edit/<name>`` via client-side JavaScript (no server round-trip
+    for the redirect).
+    """
     body = ('<div class="layout"><div class="content"><h1>New Page</h1>'
             '<p>Use <code>:</code> for namespaces, e.g. <code>projects:MyPage</code></p>'
             '<form id="nf" onsubmit="event.preventDefault();location.href=\'/edit/\'+document.getElementById(\'ni\').value.replace(/ /g,\'_\').replace(/:/g,\'/'+'\')">'
@@ -2336,6 +2975,19 @@ def new_page(request: Request, _auth: None = Depends(require_auth)):
 
 @app.get("/ns/{ns:path}", response_class=HTMLResponse)
 def ns_view(request: Request, ns: str, _auth: None = Depends(require_auth)):
+    """Render a directory listing for a wiki namespace.
+
+    Shows all sub-namespaces and wiki pages inside the corresponding
+    sub-directory of ``PAGES_DIR``, along with the file attachment
+    section for the namespace.  Respects ``USER_PAGE_HIDDEN``: other
+    users’ namespaces are hidden from the listing and inaccessible
+    directly.
+
+    Args:
+        request: Current HTTP request.
+        ns:      Namespace path (e.g. ``"projects/sub"``), extracted
+                 from the URL.
+    """
     ns = normalize_name(ns)
     for p in ns.split("/"):
         if not re.fullmatch(r"[A-Za-z0-9_\-]+", p):
@@ -2366,6 +3018,16 @@ def ns_view(request: Request, ns: str, _auth: None = Depends(require_auth)):
 
 @app.get("/sitemap", response_class=HTMLResponse)
 def sitemap(request: Request, _auth: None = Depends(require_auth)):
+    """Render the full site map as a recursive HTML tree.
+
+    Walks all directories and ``.wiki`` files under ``PAGES_DIR`` and
+    builds a nested ``<ul>`` tree.  When ``USER_PAGE_HIDDEN`` is
+    enabled, other users’ pages and namespaces are omitted from the
+    tree for the current requester.
+
+    Args:
+        request: Current HTTP request.
+    """
     requester = getattr(request.state, "username", "") or ""
     def tree(d: Path, prefix: str) -> str:
         s = "<ul>"
@@ -2395,6 +3057,21 @@ def sitemap(request: Request, _auth: None = Depends(require_auth)):
 
 @app.get("/search", response_class=HTMLResponse)
 def search(request: Request, q: str = "", _auth: None = Depends(require_auth)):
+    """Full-text search across all wiki pages.
+
+    Case-insensitive substring search performed in Python (no index).
+    For each matching page, up to a few context lines around each hit
+    are shown with the matching text highlighted via ``<mark>``.
+    Results are sorted alphabetically by page name.  Pages in other
+    users’ private namespaces are excluded when ``USER_PAGE_HIDDEN``
+    is enabled.
+
+    Redirects to ``/`` when the query is empty.
+
+    Args:
+        request: Current HTTP request.
+        q:       Search query string.
+    """
     q = q.strip()
     if not q:
         return RedirectResponse("/")
@@ -2453,6 +3130,15 @@ def search(request: Request, q: str = "", _auth: None = Depends(require_auth)):
 
 @app.get("/rename/{name:path}", response_class=HTMLResponse)
 def rename_get(request: Request, name: str, _auth: None = Depends(require_auth)):
+    """Render the rename form for a wiki page (GET).
+
+    Displays the current page name in an editable input.  Submitting
+    the form posts to ``rename_post``.
+
+    Args:
+        request: Current HTTP request.
+        name:    Current wiki page name.
+    """
     name = normalize_name(name)
     _check_page_reader(request, name)
     _check_page_owner(request, name)
@@ -2485,6 +3171,28 @@ def rename_get(request: Request, name: str, _auth: None = Depends(require_auth))
 
 @app.post("/rename/{name:path}", response_class=HTMLResponse)
 async def rename_post(request: Request, name: str, new_name: str = Form(""), _auth: None = Depends(require_auth)):
+    """Rename a wiki page and update all internal links (POST).
+
+    Steps performed:
+
+    1. Validate both the old and new page names.
+    2. Scan every ``.wiki`` file and rewrite any ``[[...]]`` links that
+       resolve to the old page name, choosing the shortest unambiguous
+       link form (relative if the pages share a namespace, absolute
+       colon-form otherwise).  Code-fenced and inline-code content
+       is protected from rewriting.
+    3. Atomically rename the ``.wiki`` file.
+    4. Remove the now-empty source namespace directory if appropriate.
+    5. Move attic snapshot files to the new path (best-effort; a
+       warning is shown on failure but the rename itself still succeeds).
+    6. Update the trace history for all users via
+       ``_rewrite_trace_all_users``.
+
+    Args:
+        request:  Current HTTP request.
+        name:     Current wiki page name.
+        new_name: Desired new wiki page name.
+    """
     name = normalize_name(name)
     new_name = normalize_name(new_name.strip().replace(":", "/"))
     try:
@@ -2649,6 +3357,16 @@ def _rewrite_trace_all_users(old_name: str, new_name: str) -> None:
 
 @app.get("/delete/{name:path}", response_class=HTMLResponse)
 def delete_get(request: Request, name: str, _auth: None = Depends(require_auth)):
+    """Render the delete-confirmation page for a wiki page.
+
+    Shows a warning notice and a confirmation form.  The actual
+    deletion is performed by ``delete_post`` when the form is
+    submitted with ``confirm=yes``.
+
+    Args:
+        request: Current HTTP request.
+        name:    Wiki page name to delete.
+    """
     name = normalize_name(name)
     try:
         page_path(name)  # validate name; raises ValueError on bad input
@@ -2669,6 +3387,18 @@ def delete_get(request: Request, name: str, _auth: None = Depends(require_auth))
 
 @app.post("/delete/{name:path}", response_class=HTMLResponse)
 async def delete_post(request: Request, name: str, confirm: str = Form(""), _auth: None = Depends(require_auth)):
+    """Delete a wiki page after confirmation.
+
+    Removes the ``.wiki`` file, cleans up its empty parent namespace
+    directory tree, and deletes all attic snapshots for the page.
+    Redirects to ``/wiki/Home`` on success.
+
+    Args:
+        request: Current HTTP request.
+        name:    Wiki page name to delete.
+        confirm: Must equal ``"yes"`` (posted from the confirmation
+                 form) to proceed; otherwise redirects back to the page.
+    """
     name = normalize_name(name)
     _check_page_reader(request, name)
     _check_page_owner(request, name)
@@ -2700,6 +3430,23 @@ async def delete_post(request: Request, name: str, confirm: str = Form(""), _aut
 # ── login / logout ─────────────────────────────────────────────────────────────
 
 def _login_page(next_url: str, error: str = "") -> HTMLResponse:
+    """Render the standalone HTML login form page.
+
+    Produces a self-contained document (no site nav) containing the
+    login form, an optional error message banner, and a hidden
+    ``next`` field that records the URL to redirect to after successful
+    authentication.
+
+    Args:
+        next_url: URL to redirect to after login (HTML-escaped in the
+                  form’s hidden field).
+        error:    Optional human-readable error message to display
+                  (e.g. ``"Invalid credentials"``).  Empty string
+                  suppresses the error banner.
+
+    Returns:
+        An ``HTMLResponse`` with the login page HTML.
+    """
     err_html = f'<div class="login-error">{html.escape(error)}</div>' if error else ""
     next_safe = html.escape(next_url)
     body = (f'<div class="login-box">'
@@ -2720,10 +3467,36 @@ def _login_page(next_url: str, error: str = "") -> HTMLResponse:
 
 @app.get("/login", response_class=HTMLResponse)
 def login_get(next: str = "/wiki/Home"):
+    """Render the login form (GET).
+
+    Args:
+        next: URL to redirect to after successful login (default:
+              ``/wiki/Home``).
+    """
     return _login_page(next)
 
 @app.post("/login", response_class=HTMLResponse)
 async def login_post(request: Request, username: str = Form(""), password: str = Form(""), next: str = Form("/wiki/Home")):
+    """Authenticate a user and issue a session token (POST).
+
+    Flow:
+
+    1. Enforce the per-IP rate-limit (5 attempts per 60 s window).
+    2. Validate *username* and *password* against the htpasswd file via
+       bcrypt (run in a thread pool to avoid blocking the event loop).
+    3. On success, call ``_issue_token`` and set the ``wiki_token``
+       cookie (``HttpOnly``, ``SameSite=Lax``, ``Secure`` when HTTPS
+       is in use).
+    4. Auto-create the user’s homepage if ``USER_PAGE_AUTOCREATE`` is
+       enabled and the page doesn’t yet exist.
+    5. Redirect to *next* (sanitised to prevent open-redirect attacks).
+
+    Args:
+        request:  Current HTTP request (used for IP extraction).
+        username: Posted username.
+        password: Posted password (plaintext; compared against bcrypt hash).
+        next:     URL to redirect to after login.
+    """
     ip = _real_ip(request)
     if not _check_rate(ip):
         return HTMLResponse("Too many login attempts. Wait 60 seconds.", status_code=429)
@@ -2759,6 +3532,12 @@ async def logout_get(request: Request):
 
 @app.post("/logout")
 async def logout(request: Request):
+    """Revoke the current session token and redirect to the login page.
+
+    Reads the token from the request (cookie / query param / header),
+    revokes it from the persistent store, deletes the ``wiki_token``
+    cookie, and issues a 303 redirect to ``/login``.
+    """
     token = _get_token(request)
     if token:
         _revoke_token(token)
@@ -2777,6 +3556,33 @@ _FILE_MIME = {
 }
 
 def _upload_page(ns: str, results: list | None, request: Request | None = None, insert_pos: int = -1) -> HTMLResponse:
+    """Render the file-upload page, optionally showing results from a prior upload.
+
+    When *results* is ``None`` (GET requests) only the upload form is shown.
+    When *results* is a list of result dicts (POST responses), a table of
+    uploaded filenames, statuses, and copy-able wiki markup snippets is also
+    rendered above the form.  Image results include a toggle to choose between
+    ``{{embed}}`` and ``[[file:link]]`` markup.
+
+    An “Insert into page” button uses ``window.opener`` to inject the markup
+    directly into the editor ``<textarea>`` at *insert_pos* and then closes
+    the upload window.  If the editor is not accessible it falls back to
+    copying to the clipboard.
+
+    Args:
+        ns:         Namespace that uploaded files will belong to (e.g.
+                    ``"projects/sub"``).  Empty string for the root namespace.
+        results:    List of result dicts with keys ``name``, ``ok``,
+                    ``markup``, ``markup_embed``, ``markup_link``,
+                    ``is_img``, and optionally ``error``.  ``None`` renders
+                    the empty form only.
+        request:    Current HTTP request (for the page shell).
+        insert_pos: Cursor position in the caller’s editor ``<textarea>``;
+                    ``-1`` means “append”.
+
+    Returns:
+        Full ``HTMLResponse`` with the upload page HTML.
+    """
     ns_display = ns.replace("/", ":") if ns else "(root)"
     pos_qs = f"?pos={insert_pos}" if insert_pos >= 0 else ""
     action = (f"/upload/{ns}" if ns else "/upload") + pos_qs
@@ -2867,6 +3673,32 @@ def _upload_page(ns: str, results: list | None, request: Request | None = None, 
     return HTMLResponse(shell(f"Upload \u2014 {html.escape(ns_display)}", body, request=request))
 
 async def _do_upload(ns: str, files: list[UploadFile], request: Request | None = None, insert_pos: int = -1) -> HTMLResponse:
+    """Validate and persist uploaded files, then return the upload result page.
+
+    Performs the following checks before saving:
+
+    * At most 20 files per request.
+    * Namespace path segments must match ``[A-Za-z0-9_-]+``.
+    * File extension must be in ``ALLOWED_EXTS``.
+    * Individual file size must not exceed ``MAX_FILE_SIZE`` (20 MB).
+    * Cumulative total for the request must not exceed ``MAX_TOTAL_SIZE``
+      (100 MB).
+
+    Accepted files are written to ``FILES_DIR/<ns>/<safe_stem>_<rand>.<ext>``
+    where the stem is sanitised to alphanumerics/hyphens/underscores and
+    truncated to 40 characters.  The random 8-hex-char suffix prevents
+    collisions when the same filename is uploaded twice.
+
+    Args:
+        ns:         Target namespace (empty string for the root).
+        files:      List of ``UploadFile`` objects from the multipart form.
+        request:    Current HTTP request (used for access-checks and the
+                    page shell).
+        insert_pos: Cursor position hint passed through to ``_upload_page``.
+
+    Returns:
+        ``HTMLResponse`` from ``_upload_page`` with upload results.
+    """
     if len(files) > 20:
         return HTMLResponse("Too many files in one request (max 20)", 400)
     if ns:
@@ -2932,6 +3764,18 @@ async def upload_post(request: Request, ns: str, pos: int = -1, files: list[Uplo
 
 @app.get("/files/{filepath:path}")
 def serve_file(request: Request, filepath: str, _auth: None = Depends(require_auth)):
+    """Serve an attached file from ``FILES_DIR``.
+
+    Validates the path against ``file_path`` (disallows traversal and
+    non-whitelisted extensions).  Applies ``X-Content-Type-Options:
+    nosniff`` on all files and ``Content-Security-Policy: sandbox`` on
+    SVG files to mitigate XSS via uploaded SVGs.
+
+    Args:
+        request:  Current HTTP request.
+        filepath: Relative path inside ``FILES_DIR`` extracted from the
+                  URL (e.g. ``"projects/sub/image.png"``).
+    """
     filepath = filepath.strip("/")
     if not filepath:
         return HTMLResponse("Not found", 404)
@@ -2960,6 +3804,17 @@ def serve_file(request: Request, filepath: str, _auth: None = Depends(require_au
 
 @app.post("/file-delete/{filepath:path}", response_class=HTMLResponse)
 async def file_delete(request: Request, filepath: str, _auth: None = Depends(require_auth)):
+    """Delete an attached file from ``FILES_DIR``.
+
+    After deletion, redirects to the referring page (if the referer
+    is the same host) or to the namespace listing / orphans page as a
+    fallback.  Access is restricted by ``_check_file_ns_owner``.
+
+    Args:
+        request:  Current HTTP request.
+        filepath: Relative path of the file to delete (e.g.
+                  ``"projects/sub/image_abc123.png"``).
+    """
     filepath = filepath.strip("/")
     if "/" in filepath:
         f_ns, filename = filepath.rsplit("/", 1)
@@ -2984,6 +3839,19 @@ async def file_delete(request: Request, filepath: str, _auth: None = Depends(req
 
 @app.get("/orphans", response_class=HTMLResponse)
 def orphans(request: Request, _auth: None = Depends(require_auth)):
+    """List all files in ``FILES_DIR`` that are not referenced by any wiki page.
+
+    Scans every ``.wiki`` file for ``{{embed}}`` and ``[[file:link]]``
+    references, then computes the set difference against all files on
+    disk.  Each orphaned file is shown in a table with its size,
+    modification date, and a delete button.
+
+    References inside fenced and inline code blocks are excluded so
+    that example markup doesn’t accidentally mark a file as referenced.
+
+    Args:
+        request: Current HTTP request.
+    """
     # Collect every file stored under FILES_DIR
     all_files: set[str] = set()
     if FILES_DIR.is_dir():
@@ -3070,6 +3938,26 @@ _SNAP_RE = re.compile(r"^\d{8}_\d{6}(_\d{6})?$")
 
 @app.get("/history/{name:path}", response_class=HTMLResponse)
 def history(request: Request, name: str, snap: str = "", view: str = "", _auth: None = Depends(require_auth)):
+    """Display version history for a wiki page, or render a specific snapshot.
+
+    Without query parameters: shows a table listing all retained
+    snapshots with view and restore buttons.
+
+    With ``?snap=<stem>``: renders the chosen snapshot.  When
+    ``?view=source`` is also present, the raw markup is shown instead
+    of the rendered HTML.
+
+    Snapshot stems are validated against the pattern
+    ``^\\d{8}_\\d{6}(_\\d{6})?$`` before accessing the attic
+    directory.
+
+    Args:
+        request: Current HTTP request.
+        name:    Wiki page name whose history to display.
+        snap:    Optional snapshot filename stem (without ``.wiki``).
+        view:    ``"source"`` to show raw markup instead of rendered
+                 HTML for a single snapshot.
+    """
     name = normalize_name(name)
     _check_page_reader(request, name)
     if not VERSIONING_ENABLED:
@@ -3159,6 +4047,17 @@ def history(request: Request, name: str, snap: str = "", view: str = "", _auth: 
 
 @app.post("/restore/{name:path}", response_class=HTMLResponse)
 async def restore_snapshot(request: Request, name: str, snap: str = Form(""), _auth: None = Depends(require_auth)):
+    """Restore a wiki page to a historical snapshot.
+
+    Reads the snapshot file from the attic, writes its content as the
+    new current page version (which itself creates a new attic snapshot
+    of the pre-restore state), then redirects to the reader view.
+
+    Args:
+        request: Current HTTP request.
+        name:    Wiki page name to restore.
+        snap:    Snapshot filename stem (from the history page form).
+    """
     name = normalize_name(name)
     _check_page_reader(request, name)
     _check_page_owner(request, name)
@@ -3187,6 +4086,17 @@ async def restore_snapshot(request: Request, name: str, snap: str = Form(""), _a
 
 @app.get("/today")
 def today(request: Request, _auth: None = Depends(require_auth)):
+    """Redirect to the journal page for today’s date.
+
+    Applies the user’s ``journal_format`` setting (falling back to
+    the site-wide ``JOURNAL_PAGE_FORMAT``) by substituting date tokens
+    via ``_apply_journal_format``.  The resulting page name is
+    normalised and redirected to with a 303.
+
+    Args:
+        request: Current HTTP request (used to read the user’s format
+                 preference and the display timezone).
+    """
     try:
         tz = ZoneInfo(DISPLAY_TIMEZONE)
     except Exception:
@@ -3203,6 +4113,19 @@ def today(request: Request, _auth: None = Depends(require_auth)):
 
 @app.post("/pin/{name:path}")
 def pin_toggle(name: str, request: Request, _auth: None = Depends(require_auth)):
+    """Toggle a wiki page in or out of the current user’s pinned-pages list.
+
+    Reads the current pin list, adds or removes *name*, persists it,
+    and redirects back to the page.  The list is capped at 20 entries;
+    adding a 21st drops the oldest non-matching pin.
+
+    Persistence uses server-side user settings for authenticated users
+    and a browser cookie for unauthenticated (non-auth mode) users.
+
+    Args:
+        name:    Wiki page name to pin or unpin.
+        request: Current HTTP request.
+    """
     name = normalize_name(name)
     _check_page_reader(request, name)
     try:
@@ -3223,6 +4146,17 @@ def pin_toggle(name: str, request: Request, _auth: None = Depends(require_auth))
 
 @app.get("/tags", response_class=HTMLResponse)
 def tags_index(request: Request, _auth: None = Depends(require_auth)):
+    """Display an index of all tags used across wiki pages.
+
+    Scans every ``.wiki`` file for a ``~~META:`` block containing a
+    ``tags:`` line, collects the tag–page mappings, and renders them
+    as a list of tagged pages grouped by tag.  Pages in other users’
+    private namespaces are excluded when ``USER_PAGE_HIDDEN`` is
+    enabled.
+
+    Args:
+        request: Current HTTP request.
+    """
     requester = getattr(request.state, "username", "") or ""
     tag_map: dict[str, list[str]] = {}
     for f in sorted(PAGES_DIR.rglob("*.wiki")):
@@ -3260,6 +4194,17 @@ def tags_index(request: Request, _auth: None = Depends(require_auth)):
 
 @app.get("/tags/{tag}", response_class=HTMLResponse)
 def tag_pages(request: Request, tag: str, _auth: None = Depends(require_auth)):
+    """Display all wiki pages tagged with a specific tag.
+
+    Scans every ``.wiki`` file and filters those whose ``~~META:``
+    ``tags:`` list contains an exact-match for *tag*.  Results are
+    sorted alphabetically and filtered by the ``USER_PAGE_HIDDEN``
+    rule.
+
+    Args:
+        request: Current HTTP request.
+        tag:     Tag string to filter by (max 80 characters).
+    """
     tag = tag.strip()
     if not tag or len(tag) > 80:
         return HTMLResponse("Invalid tag", 400)
@@ -3299,6 +4244,26 @@ def tag_pages(request: Request, tag: str, _auth: None = Depends(require_auth)):
 
 @app.post("/reorder-todos/{name:path}")
 async def reorder_todos(name: str, request: Request, _auth: None = Depends(require_auth)):
+    """Reorder todo (and list) items within a wiki page.
+
+    Accepts a JSON body ``{"order": [<line_no>, …]}``, a permutation
+    of the original line numbers of the items to reorder.  The items
+    are re-emitted into those same positions in the new display order
+    while all other lines remain unchanged.
+
+    Validation ensures:
+
+    * ``order`` is a list of unique non-negative integers.
+    * Every listed line is a valid todo-checkbox or list-item line.
+    * The list has at most 500 entries.
+
+    Uses ``snapshot=False`` so reordering doesn’t generate a history
+    entry.
+
+    Args:
+        name:    Wiki page name.
+        request: HTTP request with JSON body ``{"order": [int, …]}``.
+    """
     name = normalize_name(name)
     _check_page_reader(request, name)
     _check_page_owner(request, name)
