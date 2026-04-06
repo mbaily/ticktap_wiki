@@ -2549,7 +2549,7 @@ def view(request: Request, name: str, _auth: None = Depends(require_auth)):
         f'_qtodoEl=null;_qtodoLine=999999;_qtodoIndent=0;_qtodoPrefix="[ ] ";'
         f'var allEls=document.querySelectorAll(".content [data-line]");'
         f'if(allEls.length){{var lastEl=allEls[allEls.length-1];var lp=lastEl.dataset.prefix||"";'
-        f'if(lp==="* "||lp==="- "){{_qtodoPrefix=lp;_qtodoIndent=parseInt(lastEl.dataset.indent||"0",10);}}}}'
+        f'if(lp==="* "||lp==="- "){{_qtodoPrefix=lp;_qtodoIndent=parseInt(lastEl.dataset.indent||"0",10);_qtodoEl=lastEl;}}}}'
         f'document.getElementById("qtodo-preview").textContent="end of page";'
         f'document.getElementById("qtodo-bar").style.display="flex";'
         f'var inp=document.getElementById("qtodo-text");inp.value="";inp.focus();'
