@@ -1,5 +1,7 @@
 #!/bin/bash
 
+# A sample only deployment script to deploy to /opt from a git checkout in your home dir on a server or mini pc server
+
 # --- Configuration ---
 APP_NAME="ticktap-wiki"
 SOURCE_DIR="$HOME/other_git/ticktap_wiki"
